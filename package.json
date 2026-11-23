@@ -1,67 +1,67 @@
 {
-  "name": "dsh-wecom-notify",
-  "version": "0.9.0",
-  "private": true,
-  "type": "module",
-  "description": "DeepSeek Harness 插件：TG 话题分线程 + 企微简报镜像，6 通道，会话级开关走同源 /api",
-  "license": "MIT",
-  "author": "qxsraiy",
-  "homepage": "https://github.com/qxsraiy/dsh-to-wecom",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/qxsraiy/dsh-to-wecom.git"
-  },
-  "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "cordis-plugin",
-    "wecom",
-    "wechat",
-    "notification"
-  ],
-  "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
-    "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "index.js",
-    "client.js",
-    "cordis.patch.yml",
-    "locale/*.json",
-    "icon.svg",
-    "scripts/check-secrets.mjs",
-    "scripts/install.ps1",
-    "scripts/install.sh",
-    "scripts/tg-selftest.mjs",
-    "docs/INSTALL.md",
-    "docs/CONFIG.md",
-    "notify.js",
-    "inbound.js"
-  ],
-  "scripts": {
-    "test:chunk": "node test/harness.mjs",
-    "test:control": "node test/control-test.mjs",
-    "test:send": "node test/send-test.mjs",
-    "check:secrets": "node scripts/check-secrets.mjs .",
-    "test:dual": "node test/dual-test.mjs",
-    "test:inbound": "node test/inbound-test.mjs"
-  },
-  "dsh": {
-    "id": "dsh-wecom-notify",
-    "name": "企业微信轮次通知",
-    "description": "每轮 AI 输出结束后推送一条摘要到企业微信群机器人（text 纯文本、超长自动分段、会话级开关）",
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "immediately": true,
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-conversation"
-      ]
-    }
-  }
+    "name":  "dsh-wecom-notify",
+    "version":  "0.9.1",
+    "private":  true,
+    "type":  "module",
+    "description":  "DeepSeek Harness 插件：TG 话题分线程 + 入站指令控制 + 企微简报镜像",
+    "license":  "MIT",
+    "author":  "qxsraiy",
+    "homepage":  "https://github.com/qxsraiy/dsh-to-wecom",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git+https://github.com/qxsraiy/dsh-to-wecom.git"
+                   },
+    "keywords":  [
+                     "dsh",
+                     "deepseek-harness",
+                     "cordis-plugin",
+                     "wecom",
+                     "wechat",
+                     "notification"
+                 ],
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./client.js",
+                    "./locale/*.json":  "./locale/*.json",
+                    "./icon":  "./icon.svg",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "index.js",
+                  "client.js",
+                  "cordis.patch.yml",
+                  "locale/*.json",
+                  "icon.svg",
+                  "scripts/check-secrets.mjs",
+                  "scripts/install.ps1",
+                  "scripts/install.sh",
+                  "scripts/tg-selftest.mjs",
+                  "docs/INSTALL.md",
+                  "docs/CONFIG.md",
+                  "notify.js",
+                  "inbound.js"
+              ],
+    "scripts":  {
+                    "test:chunk":  "node test/harness.mjs",
+                    "test:control":  "node test/control-test.mjs",
+                    "test:send":  "node test/send-test.mjs",
+                    "check:secrets":  "node scripts/check-secrets.mjs .",
+                    "test:dual":  "node test/dual-test.mjs",
+                    "test:inbound":  "node test/inbound-test.mjs"
+                },
+    "dsh":  {
+                "id":  "dsh-wecom-notify",
+                "name":  "企业微信轮次通知",
+                "description":  "每轮 AI 输出结束后推送一条摘要到企业微信群机器人（text 纯文本、超长自动分段、会话级开关）",
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "immediately":  true,
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-ui-conversation"
+                                          ]
+                           }
+            }
 }

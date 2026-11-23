@@ -147,6 +147,30 @@ export function apply(ctx, config = {}) {
     },
   }
 
+  /** 会话标题变了 -> 跟着改 Telegram 话题名（只有已建过话题的会话才改）。 */
+  function renameTelegramTopic(sessionId, title) {
+    const threadId = prefs.topics && prefs.topics[sessionId]
+    if (!threadId) return
+    const effective = { ...cfg, ...settings }
+    if (!effective.telegramToken || !effective.telegramChatId) return
+    if (effective.provider !== 'telegram' && effective.mirror !== 'telegram') return
+    const shortId = String(sessionId).replace(/^session-/, '').slice(0, 4)
+    const name = ('[#' + shortId + '] ' + String(title || '')).slice(0, 120)
+    void telegramCall(effective, 'editForumTopic', {
+      chat_id: effective.telegramChatId,
+      message_thread_id: Number(threadId),
+      name,
+    }).then((result) => {
+      if (!result.json || !result.json.ok) {
+        if (log.warn) log.warn('[wecom-notify] 改话题名失败: ' + String(result.json && result.json.description ? result.json.description : ('HTTP ' + result.status)))
+      } else if (log.info) {
+        log.info('[wecom-notify] 话题名已同步: ' + name)
+      }
+    }).catch((error) => {
+      if (log.warn) log.warn('[wecom-notify] 改话题名异常: ' + String(error))
+    })
+  }
+
   function maskedConfig() {
     const values = {}
     const merged = { ...cfg, ...settings }
@@ -522,7 +546,9 @@ export function apply(ctx, config = {}) {
       if (event.type === 'session/title') {
         const title = event.data && (event.data.title || event.data.text)
         if (typeof title === 'string' && title.trim()) {
+          const changed = s.title !== title.trim()
           s.title = title.trim()
+          if (changed) renameTelegramTopic(s.id, s.title)
           const known = sessions.get(s.id)
           sessions.set(s.id, { cwd: s.cwd || (known ? known.cwd : ''), title: s.title })
         }

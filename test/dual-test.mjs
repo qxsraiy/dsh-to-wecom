@@ -69,6 +69,10 @@ emit('assistant/message', { turn: 1, step: 1, message: { role: 'assistant', cont
 emit('turn/end', { turn: 1, reason: { kind: 'completed' } })
 
 await new Promise((r) => setTimeout(r, 1200))
+// 触发改名：会话标题变化 -> editForumTopic
+emit('session/title', { title: 'CMS 扫描 v2' })
+await new Promise((r) => setTimeout(r, 600))
+
 console.log('TG 调用:')
 for (const c of tgCalls) console.log('  · ' + c.method + ' ' + JSON.stringify(c.body).slice(0, 160))
 console.log('企微镜像:')
@@ -76,8 +80,11 @@ for (const c of wcCalls) console.log('  · ' + JSON.stringify(c).slice(0, 200))
 console.log(logs.join('\n'))
 tg.close(); wc.close()
 
+const renamed = tgCalls.find((c) => c.method === 'editForumTopic')
 const created = tgCalls.some((c) => c.method === 'createForumTopic')
 const sent = tgCalls.find((c) => c.method === 'sendMessage')
-const ok = created && sent && sent.body.message_thread_id === 4242 && sent.body.text.includes('报告已生成') && wcCalls.length === 1 && wcCalls[0].text.content.startsWith('[#')
+const ok = created && sent && sent.body.message_thread_id === 4242 && sent.body.text.includes('报告已生成')
+  && renamed && renamed.body.message_thread_id === 4242 && renamed.body.name === '[#8f3a] CMS 扫描 v2'
+  && wcCalls.length === 1 && wcCalls[0].text.content.startsWith('[#')
 console.log(ok ? 'PASS' : 'FAIL')
 process.exit(ok ? 0 : 1)
