@@ -98,6 +98,14 @@ function escapeMd(text) {
   return String(text == null ? '' : text).replace(/[<>]/g, (ch) => (ch === '<' ? '‹' : '›'))
 }
 
+/** TG 里对审批的回复词：返回 'allow' / 'deny' / null。 */
+export function matchApprovalReply(text) {
+  const value = String(text == null ? '' : text).trim()
+  if (/^(y|yes|ok|同意|允许|通过)$/i.test(value)) return 'allow'
+  if (/^(n|no|拒绝|不允许|驳回)$/i.test(value)) return 'deny'
+  return null
+}
+
 export function apply(ctx, config = {}) {
   const cfg = normalize(config)
   const log = ctx && ctx.logger ? ctx.logger : console
@@ -445,6 +453,7 @@ export function apply(ctx, config = {}) {
     inbound = createTelegramInbound({
       cfg: effective,
       renameSession: renameSessionTitle,
+      resolveReply: resolveReplyFromTelegram,
       log,
       agents: agentService,
       sessions,
@@ -468,6 +477,129 @@ export function apply(ctx, config = {}) {
       },
     })
     inbound.start()
+  }
+
+
+  // ── 审批（approval/request waterfall）与提问回传 ──────────────────────────
+  const pendingApprovals = new Map() // key -> { sessionId, resolve, timer }
+  const pendingQuestions = new Map() // callId -> { sessionId, questions, agent }
+
+  function shortKey() {
+    return Math.random().toString(36).slice(2, 6).toUpperCase()
+  }
+
+  function tgReady() {
+    const e = { ...cfg, ...settings }
+    return Boolean(e.telegramToken && e.telegramChatId && e.telegramInbound)
+  }
+
+  async function tgSendTo(sessionId, text) {
+    const e = { ...cfg, ...settings }
+    const threadId = prefs.topics && prefs.topics[sessionId]
+    const body = { chat_id: e.telegramChatId, text, disable_web_page_preview: true }
+    if (threadId) body.message_thread_id = Number(threadId)
+    await telegramCall(e, 'sendMessage', body)
+  }
+
+  /** 用 telegram 话题里的 y/n 决定一次审批；超时 fail-closed。 */
+  function awaitApproval(sessionId, req) {
+    const key = shortKey()
+    return new Promise((resolve) => {
+      const settle = (outcome) => {
+        const entry = pendingApprovals.get(key)
+        if (!entry) return
+        clearTimeout(entry.timer)
+        pendingApprovals.delete(key)
+        resolve(outcome)
+      }
+      const timer = setTimeout(() => settle('unavailable'), 180000)
+      pendingApprovals.set(key, { sessionId, resolve: settle, timer })
+      const lines = []
+      lines.push('⚠️ 需要审批 [' + key + ']')
+      lines.push('工具：' + String(req.toolName || '未知'))
+      if (req.reason) lines.push('原因：' + String(req.reason).slice(0, 300))
+      lines.push('')
+      lines.push('回复 y = 允许一次 / n = 拒绝（180 秒不回复视为拒绝）')
+      void tgSendTo(sessionId, lines.join('\n')).catch((error) => {
+        if (log.warn) log.warn('[wecom-notify] 审批消息发送失败: ' + String(error))
+      })
+    })
+  }
+
+  const approvalOff = typeof ctx.on === 'function' ? ctx.on('approval/request', async (req, next) => {
+    try {
+      if (!tgReady()) return next()
+      const sessionId = req && req.agent ? req.agent.id : ''
+      if (!sessionId) return next()
+      return await awaitApproval(sessionId, req)
+    } catch (error) {
+      if (log.warn) log.warn('[wecom-notify] 审批处理异常: ' + String(error))
+      return 'unavailable'
+    }
+  }) : undefined
+
+  /** 把 ask_user_question 的提问同步到 TG，并允许从 TG 回填（仅对已超时/继续态生效）。 */
+  function noteQuestion(sessionId, callId, questions, agent) {
+    if (!tgReady()) return
+    pendingQuestions.set(callId, { sessionId, questions, agent })
+    const lines = ['❓ 提问']
+    for (const q of questions) {
+      lines.push('· ' + String(q.question || '').slice(0, 200))
+      if (Array.isArray(q.options)) q.options.forEach((opt, i) => lines.push('  ' + (i + 1) + ') ' + String(opt.label || opt)))
+    }
+    lines.push('')
+    lines.push('在 TG 里直接回复答案（选项编号或文字）')
+    void tgSendTo(sessionId, lines.join('\n')).catch((error) => {
+      if (log.warn) log.warn('[wecom-notify] 提问消息发送失败: ' + String(error))
+    })
+  }
+
+  /** 处理 TG 里对本会话审批/提问的回复；返回 true 表示已消费。 */
+  async function resolveReplyFromTelegram(sessionId, text) {
+    const value = String(text || '').trim()
+    if (!value || !sessionId) return false
+    for (const [key, entry] of pendingApprovals) {
+      if (entry.sessionId !== sessionId) continue
+      const verdict = matchApprovalReply(value)
+      if (verdict === null) continue
+      entry.resolve(verdict === 'allow' ? 'allowed-once' : 'rejected')
+      return true
+    }
+    for (const [callId, entry] of pendingQuestions) {
+      if (entry.sessionId !== sessionId) continue
+      const answers = entry.questions.map((q) => {
+        const options = Array.isArray(q.options) ? q.options : []
+        const index = Number(value)
+        if (Number.isInteger(index) && index >= 1 && index <= options.length) {
+          const label = options[index - 1].label || options[index - 1]
+          return { id: q.id, selected: [String(label)] }
+        }
+        return { id: q.id, selected: [], custom: value }
+      })
+      const service = typeof ctx.get === 'function' ? ctx.get('userQuestions') : undefined
+      if (!service || typeof service.answer !== 'function') {
+        if (log.warn) log.warn('[wecom-notify] 没有 userQuestions 服务，无法回填提问')
+        return false
+      }
+      const attempt = async (left) => {
+        try {
+          const accepted = service.answer(entry.agent, callId, { answers })
+          if (accepted) {
+            pendingQuestions.delete(callId)
+            try { await tgSendTo(sessionId, '已回答提问') } catch (error) { /* ignore */ }
+            return true
+          }
+        } catch (error) {
+          if (log.warn) log.warn('[wecom-notify] 回答提问失败: ' + String(error))
+        }
+        if (left <= 0) return false
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+        return await attempt(left - 1)
+      }
+      void attempt(12)
+      return true
+    }
+    return false
   }
 
   function registerControlRoute(routeCtx) {
@@ -589,7 +721,16 @@ export function apply(ctx, config = {}) {
         }
         return
       }
-      if (event.type === 'tool/call') { s.toolCalls += 1; return }
+      if (event.type === 'tool/call') {
+        s.toolCalls += 1
+        const data = event.data || {}
+        if (data.name === 'ask_user_question' && data.callId) {
+          const questions = (data.args && Array.isArray(data.args.questions)) ? data.args.questions : []
+          const agent = agentServiceRef && agentServiceRef.get ? agentServiceRef.get(s.id) : undefined
+          if (questions.length) noteQuestion(s.id, data.callId, questions, agent)
+        }
+        return
+      }
       if (event.type === 'turn/end') {
         const reason = (event.data && event.data.reason) || { kind: 'completed' }
         if (event.data && event.data.turn) s.turn = Number(event.data.turn)
@@ -634,6 +775,7 @@ export function apply(ctx, config = {}) {
     ctx.effect(() => () => {
       try { if (typeof off === 'function') off() } catch (error) { /* ignore */ }
       try { if (inbound) inbound.stop() } catch (error) { /* ignore */ }
+      try { if (typeof approvalOff === 'function') approvalOff() } catch (error) { /* ignore */ }
     })
   }
 }

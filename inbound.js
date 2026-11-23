@@ -17,7 +17,7 @@ function textOf(message) {
 }
 
 export function createTelegramInbound(options) {
-  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage, renameSession } = options
+  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage, renameSession, resolveReply } = options
   let offset = Number(store.get('offset') || 0)
   let running = false
   let timer = null
@@ -153,6 +153,13 @@ export function createTelegramInbound(options) {
       }
     }
     const target = resolveTarget(message)
+    if (target.sessionId && typeof resolveReply === 'function') {
+      try {
+        if (await resolveReply(target.sessionId, text)) return
+      } catch (error) {
+        if (log && log.warn) log.warn('[wecom-notify] 审批/提问回填失败: ' + String(error))
+      }
+    }
     if (!target.sessionId) {
       await sendMessage(threadId, '这个对话还没绑定会话：先 /tasks 看列表，再 /use <编号>')
       return

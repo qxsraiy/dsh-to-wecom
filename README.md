@@ -156,6 +156,15 @@ sh scripts/install.sh
 - `/rename 新标题` 直接改 DSH 会话名，TG 话题名会自动跟着变
 - `telegramUserId` 填了就等于白名单：其他人发什么都不理
 
+## 审批与提问回传
+
+- **审批**：插件注册 `approval/request` waterfall。会话需要批准时，往该会话的话题发
+  `⚠️ 需要审批 [K3F9] 工具：bash …`，你在话题里回 `y` / `n`（或「同意」/「拒绝」）即可放行/拒绝；
+  180 秒不回复按 `unavailable`（fail-closed）处理。
+- **提问**：`ask_user_question` 触发时把问题和选项同步到话题；你在话题里回编号或文字，
+  插件调用 `userQuestions.answer()` 回填（DSH 前台等待超时转为「继续态」后生效，最多重试 60 秒）。
+- 审批只在**审批策略 = `ask`** 的会话触发；`never` 的会话（如 danger-full-access + approval never）不会弹。
+
 ## 测试
 
 ```bash
