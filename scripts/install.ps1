@@ -27,7 +27,7 @@ Write-Host ('链接路径 : ' + $linkPath)
 if (-not $DryRun) {
   if (Test-Path $linkPath) {
     $existing = Get-Item $linkPath -Force
-    if ($existing.LinkType) { Remove-Item -Force $linkPath } else { throw ($linkPath + ' 已存在且不是链接，先手动删掉再装') }
+    if ($existing.LinkType) { cmd /c rmdir "$linkPath" | Out-Null } else { throw ($linkPath + ' 已存在且不是链接，先手动删掉再装') }
   }
   New-Item -ItemType Junction -Path $linkPath -Target $RepoDir | Out-Null
   Write-Host '已建立 junction'
