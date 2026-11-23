@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "WeCom Turn Notify",
+    "description": "Push a short task summary to a WeCom group robot after every assistant turn."
+  }
+}
