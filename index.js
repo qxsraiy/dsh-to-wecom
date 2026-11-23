@@ -14,6 +14,18 @@ import { basename, join } from 'node:path'
 import { PROVIDERS, deliverAll, sendNotification, telegramCall } from './notify.js'
 import { createTelegramInbound } from './inbound.js'
 
+
+// ── 启动探针：写到系统 TEMP，用来确认模块是否被加载、apply 是否执行
+import { appendFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+const BOOT_LOG = (tmpdir() || '.') + '/dsh-wecom-notify-boot.log'
+export function bootMark(stage, extra) {
+  try {
+    appendFileSync(BOOT_LOG, new Date().toISOString() + ' ' + stage + (extra ? (' ' + JSON.stringify(extra)) : '') + '\n', 'utf8')
+  } catch (error) { /* 探针失败不影响主流程 */ }
+}
+bootMark('module-load', { pid: process.pid })
+
 const DEFAULTS = {
   enabled: true,
   // 推送服务：wecom-robot | wecom-app | dingtalk | telegram | email | webhook
@@ -109,6 +121,8 @@ export function matchApprovalReply(text) {
 }
 
 export function apply(ctx, config = {}) {
+  bootMark('apply-enter', { pid: process.pid, provider: config && config.provider })
+  diag({ stage: 'apply-enter', pid: process.pid })
   const cfg = normalize(config)
   const log = ctx && ctx.logger ? ctx.logger : console
   if (!cfg.enabled) {
