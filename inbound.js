@@ -4,13 +4,37 @@ import { randomUUID } from 'node:crypto'
  * 构造 DSH 需要的最小 user 消息：必须有 id / role / content / source.kind，
  * 少了 source 会在 agent loop 里抛 "Cannot read properties of undefined (reading 'kind')"。
  */
-export function buildUserMessage(text) {
+export function buildUserMessage(text, timeZone) {
+  // 必须和 Web UI 产出的一模一样：source.kind='user' 需要 rpcId，
+  // 少了 source 会直接写坏会话日志（format v4: requires a producer-owned source kind）
   return {
     id: randomUUID(),
     role: 'user',
-    source: { kind: 'user' },
+    source: {
+      kind: 'user',
+      rpcId: randomUUID(),
+      clientTimeZone: timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    },
     content: [{ type: 'text', text: String(text == null ? '' : text) }],
   }
+}
+
+/**
+ * 兜底钳制：不管上层 builder 返回什么，落盘前都必须是「有 id、有 role、有 content、
+ * source.kind 非空且不等于 plugin」，否则 DSH 会在写日志时接受、下次读取时
+ * 以 "format v4 message requires a producer-owned source kind" 判定整条会话损坏。
+ */
+export function normalizeInboundMessage(input, fallbackText) {
+  const message = input && typeof input === 'object' && !Array.isArray(input) ? { ...input } : {}
+  if (typeof message.id !== 'string' || message.id.length === 0) message.id = randomUUID()
+  if (typeof message.role !== 'string' || message.role.length === 0) message.role = 'user'
+  if (!Array.isArray(message.content) || message.content.length === 0) {
+    message.content = [{ type: 'text', text: String(fallbackText == null ? '' : fallbackText) }]
+  }
+  const source = message.source
+  const kind = source && typeof source === 'object' && !Array.isArray(source) ? source.kind : undefined
+  if (typeof kind !== 'string' || kind.length === 0 || kind === 'plugin') message.source = { kind: 'user' }
+  return message
 }
 
 /**
@@ -208,7 +232,7 @@ export function createTelegramInbound(options) {
     const steer = text.startsWith('!')
     const payload = steer ? text.slice(1).trim() : text
     const build = typeof options.buildUserInput === 'function' ? options.buildUserInput : buildUserMessage
-    const input = build(payload)
+    const input = normalizeInboundMessage(build(payload), payload)
     try {
       if (steer) agent.steer(input)
       else agent.followup(input)
