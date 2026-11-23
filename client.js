@@ -194,7 +194,11 @@
               return { provider: prev.provider, values: values };
             });
           }
-          function pickProvider(provider) { setConfig({ provider: provider, values: config.values || {} }); }
+          function pickProvider(provider) {
+            var values = Object.assign({}, config.values || {});
+            delete values.provider;
+            setConfig({ provider: provider, values: values });
+          }
           function save() {
             setBusy('save');
             op('save-config', { provider: config.provider, values: config.values }).then(function (payload) {

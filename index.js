@@ -174,7 +174,10 @@ export function apply(ctx, config = {}) {
   function maskedConfig() {
     const values = {}
     const merged = { ...cfg, ...settings }
-    for (const key of Object.keys(cfg)) if (typeof merged[key] === 'string' || typeof merged[key] === 'number' || typeof merged[key] === 'boolean') values[key] = merged[key]
+    for (const key of Object.keys(cfg)) {
+      if (key === 'provider') continue
+      if (typeof merged[key] === 'string' || typeof merged[key] === 'number' || typeof merged[key] === 'boolean') values[key] = merged[key]
+    }
     for (const field of SECRET_FIELDS) {
       if (merged[field]) values[field] = '***'
       else values[field] = merged[field] === undefined ? '' : merged[field]
@@ -372,6 +375,7 @@ export function apply(ctx, config = {}) {
       if (input.provider && PROVIDERS.includes(input.provider)) settings.provider = input.provider
       const values = input.values && typeof input.values === 'object' ? input.values : {}
       for (const [key, value] of Object.entries(values)) {
+        if (key === 'provider') continue // 主通道只认 input.provider，避免 values 里的旧值把它盖回去
         if (SECRET_FIELDS.has(key) && (value === '***' || value === '')) continue
         settings[key] = value
       }

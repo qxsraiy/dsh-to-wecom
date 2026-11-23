@@ -1,6 +1,6 @@
 {
     "name":  "dsh-wecom-notify",
-    "version":  "0.9.2",
+    "version":  "0.9.3",
     "private":  true,
     "type":  "module",
     "description":  "DeepSeek Harness 插件：TG 话题分线程 + 入站指令控制 + 企微简报镜像",

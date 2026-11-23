@@ -81,13 +81,17 @@ turn(a, 2)
 turn(b, 2)
 await new Promise((r) => setTimeout(r, 700))
 
+// 回归：values 里带旧的 provider 也不能把主通道盖回去
+const saved = await call({ op: 'save-config', provider: 'telegram', values: { provider: 'wecom-robot', telegramToken: 'T', telegramChatId: '-1001' } })
 const cfg = await call({ op: 'config' })
+console.log('save 后 provider =', saved.provider, '| config.provider =', cfg.provider)
 console.log('config providers =', (cfg.providers || []).join(','), '| provider =', cfg.provider)
 
 console.log(logs.join('\n'))
 console.log('最终收到 =', received.length)
 for (const m of received) console.log('  · ' + (m.text || m.markdown).content.split('\n')[0])
 hook.close()
-const ok = offCount === 0 && received.length === 1 && initial.default === false && on.session.enabled === true && Array.isArray(cfg.providers)
+const ok = offCount === 0 && received.length === 1 && initial.default === false && on.session.enabled === true
+  && Array.isArray(cfg.providers) && saved.provider === 'telegram' && cfg.provider === 'telegram'
 console.log(ok ? 'PASS' : 'FAIL')
 process.exit(ok ? 0 : 1)
