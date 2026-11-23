@@ -14,7 +14,102 @@ import { connect as tlsConnect2 } from 'node:tls'
 
 function parseProxy(url) {
   const u = new URL(url)
-  return { host: u.hostname, port: Number(u.port || (u.protocol === 'https:' ? 443 : 80)), auth: u.username ? (u.username + ':' + u.password) : '' }
+  const scheme = u.protocol.replace(':', '').toLowerCase()
+  return {
+    scheme,
+    host: u.hostname,
+    port: Number(u.port || (scheme === 'https' ? 443 : 80)),
+    auth: u.username ? (decodeURIComponent(u.username) + ':' + decodeURIComponent(u.password)) : '',
+    user: u.username ? decodeURIComponent(u.username) : '',
+    pass: u.password ? decodeURIComponent(u.password) : '',
+  }
+}
+
+function waitSocket(socket, event) {
+  return new Promise((resolve, reject) => {
+    const done = () => { socket.removeListener('error', onError); resolve() }
+    const onError = (error) => { socket.removeListener(event, done); reject(failure('代理连接失败: ' + error.message, true)) }
+    socket.once(event, done)
+    socket.once('error', onError)
+  })
+}
+
+function readSome(socket, ms = TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { cleanup(); reject(failure('代理握手超时', true)) }, ms)
+    const onData = (chunk) => { cleanup(); resolve(chunk) }
+    const onError = (error) => { cleanup(); reject(failure('代理握手失败: ' + error.message, true)) }
+    function cleanup() {
+      clearTimeout(timer)
+      socket.removeListener('data', onData)
+      socket.removeListener('error', onError)
+    }
+    socket.once('data', onData)
+    socket.once('error', onError)
+  })
+}
+
+async function readExactly(socket, size, carry) {
+  let buffer = carry.chunk && carry.chunk.length ? Buffer.from(carry.chunk) : Buffer.alloc(0)
+  while (buffer.length < size) {
+    const chunk = await readSome(socket)
+    buffer = Buffer.concat([buffer, Buffer.from(chunk)])
+  }
+  carry.chunk = buffer.slice(size)
+  return buffer.slice(0, size)
+}
+
+async function httpConnectTunnel(proxy, host, port) {
+  const socket = netConnect2({ host: proxy.host, port: proxy.port })
+  socket.setTimeout(TIMEOUT_MS, () => socket.destroy())
+  await waitSocket(socket, 'connect')
+  const authHeader = proxy.auth ? ('Proxy-Authorization: Basic ' + Buffer.from(proxy.auth).toString('base64') + '\r\n') : ''
+  socket.write('CONNECT ' + host + ':' + port + ' HTTP/1.1\r\nHost: ' + host + ':' + port + '\r\n' + authHeader + '\r\n')
+  let head = ''
+  while (!head.includes('\r\n\r\n')) {
+    const chunk = await readSome(socket)
+    head += chunk.toString('latin1')
+  }
+  const status = Number(head.split(' ')[1])
+  if (status !== 200) throw failure('HTTP 代理 CONNECT 失败: ' + status, status === 407)
+  return socket
+}
+
+async function socks5Tunnel(proxy, host, port) {
+  const socket = netConnect2({ host: proxy.host, port: proxy.port })
+  socket.setTimeout(TIMEOUT_MS, () => socket.destroy())
+  await waitSocket(socket, 'connect')
+  const carry = { chunk: null }
+  const wantsAuth = Boolean(proxy.auth)
+  socket.write(Buffer.from(wantsAuth ? [5, 2, 0, 2] : [5, 1, 0]))
+  const greeting = await readExactly(socket, 2, carry)
+  if (greeting[0] !== 5) throw failure('目标端口不是 SOCKS5 代理（握手回复 ' + greeting.toString('hex') + '）')
+  if (greeting[1] === 2) {
+    if (!wantsAuth) throw failure('SOCKS5 代理要求用户名密码，请在地址里写 socks5://user:pass@host:port')
+    const user = Buffer.from(proxy.user || '', 'utf8')
+    const pass = Buffer.from(proxy.pass || '', 'utf8')
+    socket.write(Buffer.concat([Buffer.from([1, user.length]), user, Buffer.from([pass.length]), pass]))
+    const authReply = await readExactly(socket, 2, carry)
+    if (authReply[1] !== 0) throw failure('SOCKS5 认证失败')
+  } else if (greeting[1] !== 0) {
+    throw failure('SOCKS5 代理不接受无认证方式')
+  }
+  const hostBuf = Buffer.from(host, 'utf8')
+  socket.write(Buffer.concat([
+    Buffer.from([5, 1, 0, 3, hostBuf.length]),
+    hostBuf,
+    Buffer.from([(port >> 8) & 255, port & 255]),
+  ]))
+  const reply = await readExactly(socket, 4, carry)
+  if (reply[1] !== 0) throw failure('SOCKS5 CONNECT 被拒（code ' + reply[1] + '）', reply[1] === 4 || reply[1] === 5)
+  const atyp = reply[3]
+  if (atyp === 1) await readExactly(socket, 4 + 2, carry)
+  else if (atyp === 4) await readExactly(socket, 16 + 2, carry)
+  else if (atyp === 3) {
+    const length = (await readExactly(socket, 1, carry))[0]
+    await readExactly(socket, length + 2, carry)
+  } else throw failure('SOCKS5 返回了未知地址类型 ' + atyp)
+  return socket
 }
 
 async function requestThroughProxy(proxy, target, body) {
@@ -22,34 +117,17 @@ async function requestThroughProxy(proxy, target, body) {
   const secure = targetUrl.protocol === 'https:'
   const host = targetUrl.hostname
   const port = Number(targetUrl.port || (secure ? 443 : 80))
-  const socket = await new Promise((resolve, reject) => {
-    const s = netConnect2({ host: proxy.host, port: proxy.port }, () => resolve(s))
-    s.setTimeout(TIMEOUT_MS, () => { s.destroy(); reject(failure('代理连接超时', true)) })
-    s.once('error', (e) => reject(failure('代理连接失败: ' + e.message, true)))
-  })
+  const isSocks = proxy.scheme === 'socks5' || proxy.scheme === 'socks5h' || proxy.scheme === 'socks'
+  const socket = isSocks ? await socks5Tunnel(proxy, host, port) : await httpConnectTunnel(proxy, host, port)
   try {
-    const authHeader = proxy.auth ? ('Proxy-Authorization: Basic ' + Buffer.from(proxy.auth).toString('base64') + '\r\n') : ''
-    socket.write('CONNECT ' + host + ':' + port + ' HTTP/1.1\r\nHost: ' + host + ':' + port + '\r\n' + authHeader + '\r\n')
-    await new Promise((resolve, reject) => {
-      let buf = ''
-      const onData = (chunk) => {
-        buf += chunk.toString('latin1')
-        if (!buf.includes('\r\n\r\n')) return
-        socket.removeListener('data', onData)
-        const status = Number(buf.split(' ')[1])
-        if (status === 200) resolve()
-        else reject(failure('代理 CONNECT 失败: HTTP ' + status, status === 407))
-      }
-      socket.on('data', onData)
-    })
     let stream = socket
     if (secure) {
       stream = tlsConnect2({ socket, servername: host })
-      await new Promise((resolve, reject) => { stream.once('secureConnect', resolve); stream.once('error', reject) })
+      await waitSocket(stream, 'secureConnect')
     }
     const payload = Buffer.from(body, 'utf8')
     stream.write('POST ' + (targetUrl.pathname + targetUrl.search) + ' HTTP/1.1\r\nHost: ' + host + '\r\ncontent-type: application/json\r\ncontent-length: ' + payload.length + '\r\nconnection: close\r\n\r\n')
-    stream.write(payload)
+    if (payload.length) stream.write(payload)
     const raw = await new Promise((resolve, reject) => {
       const chunks = []
       stream.on('data', (c) => chunks.push(c))

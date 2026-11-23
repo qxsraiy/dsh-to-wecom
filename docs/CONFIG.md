@@ -38,7 +38,8 @@
 - 主通道发全文；镜像通道只发简报（`[#短号] 标题 · 状态（详情见 主通道）`）。
 - Telegram 话题号按 `sessionId` 缓存在 `data/sessions.json` 的 `topics` 字段，重启不丢。
 - 建话题失败（例如机器人不是管理员）不阻塞发送：退回该群的主线程。
-- 代理：`proxyUrl` 非空时所有 Telegram 请求走自实现 CONNECT 隧道（Node 的 fetch 不读系统代理）。
+- 代理：`proxyUrl` 支持 `http://` / `https://`（CONNECT 隧道）与 `socks5://` / `socks5h://`（含用户名密码）；Node 的 fetch 不读系统代理，插件自己建隧道。
+  例：软路由上的透明代理端口 `socks5://192.168.2.1:1070`，本机 Clash `http://127.0.0.1:7890`。
 
 ## 为什么按字节分段
 
