@@ -182,12 +182,21 @@ export function apply(ctx, config = {}) {
       prefs.topics[sessionId] = threadId
       savePrefs()
     },
+    setName(sessionId, name) {
+      prefs.topicNames = prefs.topicNames || {}
+      prefs.topicNames[sessionId] = name
+      savePrefs()
+    },
   }
 
   /** 会话标题变了 -> 跟着改 Telegram 话题名（只有已建过话题的会话才改）。 */
   function renameTelegramTopic(sessionId, title) {
     const threadId = prefs.topics && prefs.topics[sessionId]
-    if (!threadId) return
+    if (!threadId || !title) return
+    prefs.topicNames = prefs.topicNames || {}
+    if (prefs.topicNames[sessionId] === title) return
+    prefs.topicNames[sessionId] = title
+    savePrefs()
     const effective = { ...cfg, ...settings }
     if (!effective.telegramToken || !effective.telegramChatId) {
       diag({ stage: 'skip-missing-config', hasToken: Boolean(effective.telegramToken), hasChat: Boolean(effective.telegramChatId) })
@@ -351,6 +360,20 @@ export function apply(ctx, config = {}) {
   const prefs = { defaultEnabled: false, sessions: {}, topics: {}, bindings: {}, inbound: {} } // sessions: 开关; topics: sessionId->threadId
   const sessions = new Map() // sessionId -> { cwd, title }
 
+  function titleFromSession(session) {
+    try {
+      if (!session || typeof session.snapshotEvents !== 'function') return ''
+      const events = session.snapshotEvents()
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const event = events[i]
+        if (event && event.type === 'session/title' && event.data && typeof event.data.title === 'string' && event.data.title.trim()) {
+          return event.data.title.trim()
+        }
+      }
+    } catch (error) { /* 日志读不到就走回退 */ }
+    return ''
+  }
+
   function fallbackTitleFrom(s) {
     const text = String((s && (s.firstUserText || '')) || '').replace(/\s+/g, ' ').trim()
     return text ? text.slice(0, 24) : ''
@@ -385,6 +408,7 @@ export function apply(ctx, config = {}) {
         if (parsed.topics && typeof parsed.topics === 'object') prefs.topics = parsed.topics
         if (parsed.bindings && typeof parsed.bindings === 'object') prefs.bindings = parsed.bindings
         if (parsed.inbound && typeof parsed.inbound === 'object') prefs.inbound = parsed.inbound
+        if (parsed.topicNames && typeof parsed.topicNames === 'object') prefs.topicNames = parsed.topicNames
       }
     } catch (error) { /* 首次运行没有配置文件 */ }
   }
@@ -919,8 +943,12 @@ export function apply(ctx, config = {}) {
         const sessionAllowed = shouldNotify(s.id)
         if (wanted && sessionAllowed && (cfg.includeSubagents || !isSub)) {
           const info = reasonOf(reason)
+          // 会话真名优先：每轮都从日志里取最新标题（实时事件可能没赶上）
+          const fromLog = titleFromSession(session)
+          if (fromLog && fromLog !== s.title) s.title = fromLog
           const shortId = s.id.replace(/^session-/, '').slice(0, 4)
           const title = s.title || fallbackTitleFrom(s) || ('会话 #' + shortId)
+          renameTelegramTopic(s.id, title)
           const brief = '[#' + shortId + '] ' + title + ' · ' + info.label + '（详情见 ' + (String(({ ...cfg, ...settings }).provider) === 'telegram' ? 'TG' : '主通道') + '）'
           enqueue(compose(s, info), { meta: { title, sessionId: s.id, project: s.cwd, level: reason.kind || 'completed' }, brief })
         }

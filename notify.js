@@ -295,7 +295,10 @@ async function ensureTelegramTopic(cfg, meta) {
   const json = parseJson(raw.text)
   if (!json.ok) throw failure('Telegram 建话题失败: ' + (json.description || ('HTTP ' + raw.status)), raw.status >= 500)
   const threadId = json.result && json.result.message_thread_id
-  if (store && threadId) store.set(key, threadId)
+  if (store && threadId) {
+    store.set(key, threadId)
+    if (typeof store.setName === 'function') store.setName(key, name)
+  }
   return threadId
 }
 
