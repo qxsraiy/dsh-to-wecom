@@ -1,3 +1,18 @@
+import { randomUUID } from 'node:crypto'
+
+/**
+ * 构造 DSH 需要的最小 user 消息：必须有 id / role / content / source.kind，
+ * 少了 source 会在 agent loop 里抛 "Cannot read properties of undefined (reading 'kind')"。
+ */
+export function buildUserMessage(text) {
+  return {
+    id: randomUUID(),
+    role: 'user',
+    source: { kind: 'user' },
+    content: [{ type: 'text', text: String(text == null ? '' : text) }],
+  }
+}
+
 /**
  * Telegram 入站控制：长轮询 getUpdates（出站，无公网回调）。
  * 路由规则：
@@ -192,7 +207,8 @@ export function createTelegramInbound(options) {
     }
     const steer = text.startsWith('!')
     const payload = steer ? text.slice(1).trim() : text
-    const input = { role: 'user', content: [{ type: 'text', text: payload }] }
+    const build = typeof options.buildUserInput === 'function' ? options.buildUserInput : buildUserMessage
+    const input = build(payload)
     try {
       if (steer) agent.steer(input)
       else agent.followup(input)

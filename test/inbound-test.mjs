@@ -9,7 +9,7 @@ const sessionInfo = new Map([
   ['session-bbbb2222', { title: '报告整理', cwd: 'D:/rep' }],
 ])
 const agentCalls = []
-const fakeAgent = (id) => ({ status: 'idle', followup: (input) => agentCalls.push({ id, kind: 'followup', text: input.content[0].text }), steer: (input) => agentCalls.push({ id, kind: 'steer', text: input.content[0].text }), cancel: () => agentCalls.push({ id, kind: 'cancel' }) })
+const fakeAgent = (id) => ({ status: 'idle', followup: (input) => agentCalls.push({ id, kind: 'followup', text: input.content[0].text, source: input.source, hasId: Boolean(input.id), role: input.role }), steer: (input) => agentCalls.push({ id, kind: 'steer', text: input.content[0].text, source: input.source, hasId: Boolean(input.id), role: input.role }), cancel: () => agentCalls.push({ id, kind: 'cancel' }) })
 const agents = { get: (id) => (sessionInfo.has(id) ? fakeAgent(id) : undefined) }
 
 const inbound = createTelegramInbound({
@@ -60,6 +60,7 @@ const ok = renames.length === 1 && renames[0].sessionId === 'session-aaaa1111' &
   && agentCalls[0].id === 'session-aaaa1111' && agentCalls[0].kind === 'followup'
   && agentCalls[1].id === 'session-bbbb2222'
   && agentCalls[2].kind === 'steer'
+  && agentCalls.every((c) => c.kind === 'cancel' || (c.source && c.source.kind === 'user' && c.hasId && c.role === 'user'))
   && sent.some((s) => s.text.includes('1) #aaaa')) 
   && sent.some((s) => s.text.includes('还没绑定'))
 console.log(ok ? 'PASS' : 'FAIL')
