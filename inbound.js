@@ -17,7 +17,7 @@ function textOf(message) {
 }
 
 export function createTelegramInbound(options) {
-  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage } = options
+  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage, renameSession } = options
   let offset = Number(store.get('offset') || 0)
   let running = false
   let timer = null
@@ -106,6 +106,20 @@ export function createTelegramInbound(options) {
       const current = resolveTarget(message)
       const agent = current.sessionId ? agentOf(current.sessionId) : undefined
       await sendMessage(threadId, '会话：' + (current.sessionId ? ('#' + shortId(current.sessionId)) : '未绑定') + '\n状态：' + (agent ? agent.status : '未知') + '\n来源：' + current.via)
+      return true
+    }
+    if (cmd === '/rename') {
+      const current = resolveTarget(message)
+      if (!current.sessionId) { await sendMessage(threadId, '先 /tasks 选一个会话再改名'); return true }
+      const newTitle = arg.trim()
+      if (!newTitle) { await sendMessage(threadId, '用法：/rename 新标题'); return true }
+      if (typeof renameSession !== 'function') { await sendMessage(threadId, '这个 DSH 没有可用的标题服务'); return true }
+      try {
+        await renameSession(current.sessionId, newTitle)
+        await sendMessage(threadId, '已改名：' + newTitle)
+      } catch (error) {
+        await sendMessage(threadId, '改名失败：' + String(error && error.message ? error.message : error))
+      }
       return true
     }
     if (cmd === '/stop') {

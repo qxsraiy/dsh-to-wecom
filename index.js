@@ -422,13 +422,25 @@ export function apply(ctx, config = {}) {
 
   // ── Telegram 入站控制（长轮询）────────────────────────────────────────────
   let inbound = null
+  let agentServiceRef = null
+  async function renameSessionTitle(sessionId, title) {
+    const titleService = typeof ctx.get === 'function' ? ctx.get('sessionTitle') : undefined
+    if (!titleService || typeof titleService.rename !== 'function') throw new Error('会话标题服务不可用')
+    const agent = agentServiceRef && agentServiceRef.get ? agentServiceRef.get(sessionId) : undefined
+    const session = agent && agent.session
+    if (!session) throw new Error('会话不在运行')
+    titleService.rename(session, title)
+  }
+
   function startTelegramInbound(agentService) {
     const effective = { ...cfg, ...settings }
     if (!effective.telegramInbound) return
     if (!effective.telegramToken || !effective.telegramChatId) return
     if (inbound) return
+    agentServiceRef = agentService
     inbound = createTelegramInbound({
       cfg: effective,
+      renameSession: renameSessionTitle,
       log,
       agents: agentService,
       sessions,

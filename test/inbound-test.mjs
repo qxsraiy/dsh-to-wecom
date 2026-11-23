@@ -1,6 +1,7 @@
 import { createTelegramInbound } from '../inbound.js'
 
 const sent = []
+const renames = []
 const calls = []
 const prefs = { defaultEnabled: false, sessions: {}, topics: { 'session-aaaa1111': 11, 'session-bbbb2222': 22 }, bindings: {} }
 const sessionInfo = new Map([
@@ -21,6 +22,7 @@ const inbound = createTelegramInbound({
   store: { get: () => undefined, set() {} },
   api: { getUpdates: async () => [] },
   sendMessage: async (threadId, text) => { sent.push({ threadId, text }) },
+  renameSession: async (sessionId, title) => { renames.push({ sessionId, title }) },
 })
 
 const upd = (threadId, text, fromId = '1107421079') => ({
@@ -44,13 +46,17 @@ await inbound.handleUpdate(upd(11, '! 注意别删文件'))
 await inbound.handleUpdate(upd(11, '/tasks'))
 // 5) 未绑定话题：33 提示
 await inbound.handleUpdate(upd(33, '你好'))
-// 6) 非白名单用户
+// 6) /rename
+await inbound.handleUpdate(upd(11, '/rename 新的任务名'))
+// 7) 非白名单用户
 await inbound.handleUpdate(upd(11, '陌生人指令', '999'))
 
 console.log('AGENT:', JSON.stringify(agentCalls, null, 0))
 console.log('SENT:')
 for (const s of sent) console.log('  thread=' + s.threadId + ' | ' + s.text.replace(/\n/g, ' / '))
-const ok = agentCalls.length === 3
+const ok = renames.length === 1 && renames[0].sessionId === 'session-aaaa1111' && renames[0].title === '新的任务名'
+  && sent.some((s) => s.text.includes('已改名：新的任务名'))
+  && agentCalls.length === 3
   && agentCalls[0].id === 'session-aaaa1111' && agentCalls[0].kind === 'followup'
   && agentCalls[1].id === 'session-bbbb2222'
   && agentCalls[2].kind === 'steer'

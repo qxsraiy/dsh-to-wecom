@@ -153,6 +153,7 @@ sh scripts/install.sh
 - `! 补充指令` → 纠偏**正在执行**的 turn（`agent.steer`）
 - `/tasks` 列会话（编号 + 短号 + 标题）；`/use 2` 或 `/use 8f3a` 改绑定
 - `/status` 看当前绑定与运行状态；`/stop` 中断当前会话
+- `/rename 新标题` 直接改 DSH 会话名，TG 话题名会自动跟着变
 - `telegramUserId` 填了就等于白名单：其他人发什么都不理
 
 ## 测试
