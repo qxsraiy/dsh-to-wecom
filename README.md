@@ -76,7 +76,8 @@ New-Item -ItemType Junction `
   name: 'dsh-wecom-notify'
   config:
     enabled: true
-    webhookKey: '你的群机器人 key'
+    provider: wecom-robot
+    wecomKey: '你的群机器人 key'
     format: text            # text | markdown
     notifyOn: every-turn    # every-turn | completed | errors-only
     includeSubagents: false
@@ -87,6 +88,16 @@ New-Item -ItemType Junction `
 ```
 
 或者干脆把 key 放进环境变量 `WECOM_ROBOT_KEY`，仓库里保持空值。
+
+> 本仓库不含任何真实凭据；`npm run check:secrets` 可自检，详见 [SECURITY.md](SECURITY.md)。
+
+## 把插件分享给别人
+
+1. 对方 clone 本仓库，按「安装」把目录加成 bundle（或 `dsh plugin add file:<路径>`）；
+2. 重启 DSH，设置 → 插件 → **通知推送**：选服务、填自己的凭据、点「发送测试」；
+3. 到要收通知的会话，点头部右上角 `🔔 推送关` 变绿即可。
+
+凭据只落在对方本机的 `settings.json` / profile patch，不会回到仓库。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
