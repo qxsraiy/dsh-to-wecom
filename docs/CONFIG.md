@@ -20,6 +20,19 @@
 
 子代理会话通过 `session.header.parentSessionId` / `parentAgentId` 识别，默认不通知。
 
+## 推送服务实现（host 侧 `notify.js`）
+
+| 服务 | 端点 | 备注 |
+|---|---|---|
+| wecom-robot | `POST {wecomApiBase}/cgi-bin/webhook/send?key=` | `wecomApiBase` 可指向自建 mock，便于测试 |
+| wecom-app | `GET /cgi-bin/gettoken` → `POST /cgi-bin/message/send` | access_token 缓存至过期前 1 分钟 |
+| dingtalk | `POST /robot/send?access_token=&timestamp=&sign=` | sign = base64(HmacSHA256(secret, timestamp + '\n' + secret))，再 urlEncode |
+| telegram | `POST /bot<token>/sendMessage` | 429/5xx 视为可重试 |
+| email | SMTP | 465 隐式 TLS / 587 STARTTLS；AUTH LOGIN 失败回落 PLAIN；正文 base64 |
+| webhook | 任意 URL | 默认 JSON，`{{text}}/{{title}}/{{session}}/{{project}}/{{level}}/{{time}}` 占位 |
+
+配置优先级：**面板保存的 `settings.json` > patch 里的 `config`**。密钥字段面板只回显 `***`。
+
 ## 为什么按字节分段
 
 企业微信群机器人：`text` 单条 **2048 字节**、`markdown` 单条 **4096 字节**，超了会被截断（不报错）。

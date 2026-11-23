@@ -1,9 +1,9 @@
 {
   "name": "dsh-wecom-notify",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "DeepSeek Harness 插件：每轮 AI 输出结束后推送企业微信/微信通知，开关按会话区分",
+  "description": "DeepSeek Harness 插件：每轮输出后推送通知，支持企业微信/钉钉/Telegram/邮件/自定义 webhook，右上角会话级开关",
   "license": "MIT",
   "author": "qxsraiy",
   "homepage": "https://github.com/qxsraiy/dsh-to-wecom",
@@ -28,6 +28,7 @@
   },
   "files": [
     "index.js",
+    "notify.js",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",

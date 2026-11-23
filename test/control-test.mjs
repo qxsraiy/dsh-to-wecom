@@ -1,5 +1,10 @@
 import http from 'node:http'
+import { fileURLToPath } from 'node:url'
+import { rmSync } from 'node:fs'
 import { apply } from '../index.js'
+
+const QUEUE_DIR = fileURLToPath(new URL('./.queue-control', import.meta.url))
+rmSync(QUEUE_DIR, { recursive: true, force: true })
 
 const received = []
 const hook = http.createServer((req, res) => {
@@ -22,15 +27,17 @@ const ctx = {
 }
 
 apply(ctx, {
-  webhookUrl: 'http://127.0.0.1:18091/send?key=test',
+  provider: 'wecom-robot',
+  wecomApiBase: 'http://127.0.0.1:18091',
+  wecomKey: 'test',
   format: 'text',
   notifyOn: 'every-turn',
   minGapMs: 5,
-  queueDir: new URL('./.queue', import.meta.url).pathname,
-  controlPort: 18792,
+  queueDir: QUEUE_DIR,
+  controlPort: 18794,
 })
 
-// 两个会话、同一个目录，验证按会话区分
+// 两个会话、同一个目录：验证默认关闭 + 按会话开启互不影响
 const a = { id: 'session-aaaa1111', header: { cwd: 'D:\\aiwork\\cms' } }
 const b = { id: 'session-bbbb2222', header: { cwd: 'D:\\aiwork\\cms' } }
 const emit = (session, type, data) => { for (const [name, fn] of handlers) if (name === 'session/event') fn(session, { type, data, seq: 0, time: Date.now() }) }
@@ -42,27 +49,29 @@ const turn = (session, n) => {
 
 emit(a, 'session/title', { title: 'CMS 扫描' })
 emit(b, 'session/title', { title: 'CMS 报告' })
-const base = 'http://127.0.0.1:18792'
+const base = 'http://127.0.0.1:18794'
 await new Promise((r) => setTimeout(r, 400))
 
-const s1 = await (await fetch(base + '/ctl/state?session=session-aaaa1111')).json()
-console.log('session A state =', JSON.stringify(s1.session))
+const initial = await (await fetch(base + '/ctl/state?session=session-aaaa1111')).json()
+console.log('默认状态 =', JSON.stringify(initial.session), '默认开关 =', initial.default)
 
-const off = await (await fetch(base + '/ctl/toggle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: 'session-aaaa1111' }) })).json()
-console.log('A toggled       =', JSON.stringify(off.session))
+turn(a, 1)   // 默认关闭 -> 不发
+turn(b, 1)   // 默认关闭 -> 不发
+await new Promise((r) => setTimeout(r, 500))
+const afterDefaultOff = received.length
+console.log('默认关闭时收到 =', afterDefaultOff)
 
-turn(a, 1)   // A 已静音 -> 不发
-turn(b, 1)   // B 默认开 -> 发
-await new Promise((r) => setTimeout(r, 600))
+const on = await (await fetch(base + '/ctl/toggle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: 'session-aaaa1111' }) })).json()
+console.log('A 打开后 =', JSON.stringify(on.session))
 
-turn(a, 2)   // A 仍然静音
-turn(b, 2)   // B 再发一条
+turn(a, 2)   // A 开 -> 发
+turn(b, 2)   // B 仍关 -> 不发
 await new Promise((r) => setTimeout(r, 600))
 
 console.log('logs:\n' + logs.join('\n'))
-console.log('received =', received.length)
+console.log('最终收到 =', received.length)
 for (const m of received) console.log('  · ' + (m.text || m.markdown).content.split('\n')[0])
 hook.close()
-const ok = received.length === 2 && s1.session.enabled === true && off.session.enabled === false
+const ok = afterDefaultOff === 0 && received.length === 1 && initial.default === false && on.session.enabled === true
 console.log(ok ? 'PASS' : 'FAIL')
 process.exit(ok ? 0 : 1)

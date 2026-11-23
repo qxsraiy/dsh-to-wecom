@@ -12,9 +12,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { basename, join } from 'node:path'
+import { PROVIDERS, sendNotification } from './notify.js'
 
 const DEFAULTS = {
   enabled: true,
+  // 推送服务：wecom-robot | wecom-app | dingtalk | telegram | email | webhook
+  provider: 'wecom-robot',
   webhookUrl: '',
   webhookKey: '',
   format: 'text',        // text | markdown
@@ -36,6 +39,8 @@ function normalize(config = {}) {
   const cfg = { ...DEFAULTS, ...config }
   cfg.webhookUrl = String(cfg.webhookUrl || '')
   cfg.webhookKey = String(cfg.webhookKey || process.env.WECOM_ROBOT_KEY || '')
+  cfg.provider = PROVIDERS.includes(cfg.provider) ? cfg.provider : DEFAULTS.provider
+  cfg.wecomKey = String(cfg.wecomKey || cfg.webhookKey || '')
   cfg.format = cfg.format === 'markdown' ? 'markdown' : 'text'
   cfg.minGapMs = Number.isFinite(Number(cfg.minGapMs)) ? Number(cfg.minGapMs) : DEFAULTS.minGapMs
   cfg.maxRetries = Number.isFinite(Number(cfg.maxRetries)) ? Number(cfg.maxRetries) : DEFAULTS.maxRetries
@@ -91,9 +96,8 @@ export function apply(ctx, config = {}) {
     if (log.info) log.info('[wecom-notify] 已禁用（config.enabled=false）')
     return
   }
-  if (!cfg.webhookUrl && !cfg.dryRun) {
-    if (log.warn) log.warn('[wecom-notify] 缺少 webhookUrl / webhookKey，通知不会发出')
-    return
+  if (cfg.dryRun) {
+    if (log.info) log.info('[wecom-notify] dry-run 模式：只打日志不发送')
   }
 
   const state = new Map()
@@ -101,6 +105,40 @@ export function apply(ctx, config = {}) {
   let pumping = null
   const queueDir = cfg.queueDir || join(process.cwd(), '.dsh-wecom-notify')
   const queueFile = join(queueDir, 'pending.jsonl')
+  const settingsFile = join(queueDir, 'settings.json')
+  // 面板里保存的推送配置；为空时用 patch 里的 config
+  const settings = {}
+  const SECRET_FIELDS = new Set(['wecomKey', 'wecomSecret', 'dingSecret', 'telegramToken', 'mailPass', 'webhookAuth'])
+  let lastSessionId = ''
+
+  async function loadSettings() {
+    try {
+      const parsed = JSON.parse(await readFile(settingsFile, 'utf8'))
+      if (parsed && typeof parsed === 'object') Object.assign(settings, parsed)
+    } catch (error) { /* 没有面板配置 */ }
+  }
+
+  function saveSettings() {
+    void (async () => {
+      try {
+        await mkdir(queueDir, { recursive: true })
+        await writeFile(settingsFile, JSON.stringify(settings, null, 2) + '\n', 'utf8')
+      } catch (error) {
+        if (log.warn) log.warn('[wecom-notify] 设置落盘失败: ' + String(error))
+      }
+    })()
+  }
+
+  function maskedConfig() {
+    const values = {}
+    const merged = { ...cfg, ...settings }
+    for (const key of Object.keys(cfg)) if (typeof merged[key] === 'string' || typeof merged[key] === 'number' || typeof merged[key] === 'boolean') values[key] = merged[key]
+    for (const field of SECRET_FIELDS) {
+      if (merged[field]) values[field] = '***'
+      else values[field] = merged[field] === undefined ? '' : merged[field]
+    }
+    return { provider: merged.provider, values }
+  }
 
   function stateOf(session) {
     const id = String(session && session.id ? session.id : 'unknown')
@@ -109,6 +147,7 @@ export function apply(ctx, config = {}) {
       s = { id, title: '', cwd: '', turn: 0, turnStart: 0, lastText: '', texts: [], toolCalls: 0, steps: 0, lastError: '' }
       state.set(id, s)
     }
+    lastSessionId = id
     if (!s.cwd && session && session.header && session.header.cwd) s.cwd = String(session.header.cwd)
     if (s.cwd) {
       const known = sessions.get(id)
@@ -117,28 +156,15 @@ export function apply(ctx, config = {}) {
     return s
   }
 
-  async function send(content) {
+  async function send(content, meta) {
     if (cfg.dryRun) {
       if (log.info) log.info('[wecom-notify][dry-run] ' + content.replace(/\n/g, ' | '))
       return
     }
-    const body = cfg.format === 'markdown'
-      ? { msgtype: 'markdown', markdown: { content } }
-      : { msgtype: 'text', text: { content } }
-    const res = await fetch(cfg.webhookUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
-    })
-    const raw = await res.text()
-    let payload
-    try { payload = JSON.parse(raw) } catch (error) { payload = { errcode: res.status, errmsg: raw.slice(0, 200) } }
-    if (!res.ok || payload.errcode !== 0) {
-      const err = new Error('wecom errcode=' + payload.errcode + ' errmsg=' + payload.errmsg)
-      err.retryable = payload.errcode === 45009 || payload.errcode === -1 || res.status >= 500 || res.status === 429
-      throw err
-    }
+    // patch 配置 < 面板设置（settings.json），面板里改的优先
+    const effective = { ...cfg, ...settings }
+    effective.provider = PROVIDERS.includes(effective.provider) ? effective.provider : cfg.provider
+    await sendNotification(effective, content, meta || {})
   }
 
   async function persist() {
@@ -157,7 +183,7 @@ export function apply(ctx, config = {}) {
       while (queue.length > 0) {
         const job = queue[0]
         try {
-          await send(job.content)
+          await send(job.content, job.meta)
           queue.shift()
         } catch (error) {
           job.attempts += 1
@@ -215,14 +241,14 @@ export function apply(ctx, config = {}) {
     return parts.flatMap((part) => (Buffer.byteLength(part, 'utf8') > maxBytes ? splitByChars(part, maxBytes) : [part]))
   }
 
-  function enqueue(content) {
+  function enqueue(content, jobMeta) {
     // 企业微信：text 2048 字节 / markdown 4096 字节。留余量，超长拆成多条并标 [i/n]。
     const maxBytes = cfg.format === 'markdown' ? 3800 : 1800
     const parts = packLines(content, maxBytes)
     const total = parts.length
     for (let i = 0; i < total; i += 1) {
       const prefix = total > 1 ? '[' + (i + 1) + '/' + total + '] ' : ''
-      queue.push({ content: prefix + parts[i], attempts: 0 })
+      queue.push({ content: prefix + parts[i], attempts: 0, meta: jobMeta })
     }
     void persist()
     void pump()
@@ -231,7 +257,7 @@ export function apply(ctx, config = {}) {
   // ── 每个会话的推送开关（界面开关读写这里；按 sessionId 区分，同一目录的不同会话互不影响）
   const dataDir = cfg.queueDir || join(process.cwd(), '.dsh-wecom-notify')
   const prefsFile = join(dataDir, 'sessions.json')
-  const prefs = { defaultEnabled: true, sessions: {} } // sessionId -> { enabled, title, cwd, updatedAt }
+  const prefs = { defaultEnabled: false, sessions: {} } // sessionId -> { enabled, title, cwd, updatedAt }
   const sessions = new Map() // sessionId -> { cwd, title }
 
   function sessionLabel(id, record) {
@@ -314,6 +340,38 @@ export function apply(ctx, config = {}) {
       return body ? JSON.parse(body) : {}
     }
     try {
+      if (req.method === 'GET' && url.pathname === '/ctl/current') {
+        send(200, { ok: true, sessionId: lastSessionId, session: lastSessionId ? sessionState(lastSessionId) : null, state: snapshot() })
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/ctl/config') {
+        send(200, { ok: true, providers: PROVIDERS, ...maskedConfig() })
+        return
+      }
+      if (req.method === 'POST' && url.pathname === '/ctl/config') {
+        let input
+        try { input = await readBody() } catch (error) { send(400, { ok: false, error: 'bad_json' }); return }
+        if (input.provider && PROVIDERS.includes(input.provider)) settings.provider = input.provider
+        const values = input.values && typeof input.values === 'object' ? input.values : {}
+        for (const [key, value] of Object.entries(values)) {
+          if (SECRET_FIELDS.has(key) && (value === '***' || value === '')) continue
+          settings[key] = value
+        }
+        saveSettings()
+        send(200, { ok: true, providers: PROVIDERS, ...maskedConfig() })
+        return
+      }
+      if (req.method === 'POST' && url.pathname === '/ctl/test') {
+        const effective = { ...cfg, ...settings }
+        const text = '[DSH] 测试通知 · ' + new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) + '\n如果你收到这条，说明通道配好了。'
+        try {
+          const result = await sendNotification(effective, text, { title: '测试通知', level: 'test' })
+          send(200, { ok: true, result })
+        } catch (error) {
+          send(200, { ok: false, error: String(error && error.message ? error.message : error) })
+        }
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/ctl/state') {
         const sessionId = url.searchParams.get('session') || ''
         if (sessionId) rememberSession(sessionId, {})
@@ -367,6 +425,7 @@ export function apply(ctx, config = {}) {
   }
 
   let controlServer = null
+  void loadSettings()
   if (cfg.controlEnabled) {
     void loadPrefs().then(() => {
       controlServer = createServer((req, res) => { void handleControl(req, res) })
@@ -473,7 +532,9 @@ export function apply(ctx, config = {}) {
           || (cfg.notifyOn === 'completed' && kind === 'completed')
           || (cfg.notifyOn === 'errors-only' && kind === 'error')
         const sessionAllowed = shouldNotify(s.id)
-        if (wanted && sessionAllowed && (cfg.includeSubagents || !isSub)) enqueue(compose(s, reasonOf(reason)))
+        if (wanted && sessionAllowed && (cfg.includeSubagents || !isSub)) {
+          enqueue(compose(s, reasonOf(reason)), { title: s.title || basename(s.cwd || '') || 'DSH', sessionId: s.id, project: s.cwd, level: reason.kind || 'completed' })
+        }
       }
     } catch (error) {
       if (log.warn) log.warn('[wecom-notify] session/event 处理异常: ' + String(error && error.message ? error.message : error))

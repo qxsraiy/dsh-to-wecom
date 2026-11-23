@@ -1,6 +1,6 @@
 # dsh-to-wecom
 
-把 **DeepSeek Harness（DSH）** 每一轮 AI 输出结束后的摘要，推送到 **企业微信群机器人**，微信/企业微信都能直接看。
+把 **DeepSeek Harness（DSH）** 每一轮 AI 输出结束后的摘要，推送到你选的通道：**企业微信群机器人 / 企业微信应用消息 / 钉钉机器人 / Telegram / 邮件 / 自定义 webhook**。
 
 只出站、单向、无需服务器：不需要企业微信自建应用、不需要「企业可信 IP」、不需要回调域名。
 
@@ -17,7 +17,8 @@ DSH Host 插件 ──(turn/end 事件)──► 组包 + 分段 + 队列 ──
 - **超长自动分段**：企业微信 text 上限 2048 字节，插件按 1800 字节一条、优先在换行处切，标 `[1/3]`
 - **整轮内容**：汇总本轮所有 assistant 输出（多步也拼上），保留原换行，默认不截断
 - **队列 + 重试**：内存队列 + 串行闸门 + 指数退避，失败落盘 `pending.jsonl`，重启补发；限流 3.2s/条贴着 20 条/分钟
-- **会话级开关**：输入区**右下角**一枚小按钮，只管当前会话，按 `sessionId` 静音（同一目录的不同会话互不影响）
+- **多通道**：6 种推送服务，在插件设置页里选一种、填对应表单即可，一行配置切换
+- **会话级开关**：会话头部**右上角**一枚小按钮，只管当前会话，按 `sessionId` 开关（同一目录的不同会话互不影响），**默认关闭**，要哪个自己开
 - **零依赖**：只用 Node 内置模块（`node:http` / `node:fs` / 全局 `fetch`）
 
 ## 通知长什么样
@@ -103,30 +104,33 @@ New-Item -ItemType Junction `
 | `controlPort` | `8791` | 本机控制接口端口（只绑 127.0.0.1） |
 | `dryRun` | `false` | 只打日志不发送 |
 
-## 界面开关（会话级，右下角）
+## 界面开关（会话级，右上角）
 
-输入区**右下角**一枚小按钮，不占中间位置：
+会话头部**右上角**一枚小按钮（默认关闭）：
 
 ```
-                        ● 🔔 推送开
+                              ● 🔔 推送关
 ```
 
-- **只管当前会话**：点一下就切换这个会话的推送，没有下拉、没有面板
-- 绿点=开，灰点=关；鼠标悬停显示会话标题、会话 ID、以及点了会怎样
-- Host 不在线时变成红点 + `🔔 通知离线`，禁用点击
-- 取不到当前会话 ID 时按钮置灰并提示
+- **只管当前会话**：点一下切换这个会话，没有下拉、没有面板
+- 绿点=开，灰点=关；悬停显示会话标题与 ID
+- Host 不在线时红点 + `通知离线`，禁用点击
+- 默认 `defaultEnabled: false` —— **不主动打扰，用哪个会话点哪个**
 
-开关状态存在 `data/sessions.json`（`queueDir` 下），按 `sessionId` 记录；同一 cwd 的不同会话互不影响。
+## 推送服务配置（插件设置页）
 
-控制接口（界面就是调它，只绑 `127.0.0.1`）：
+设置 → 插件 → **通知推送** 标签页：第一行选推送服务，下面自动换成对应表单，填完点「保存」，可点「发送测试」立刻验证。
 
-| 方法 | 路径 | 说明 |
+| 服务 | 需要的字段 | 说明 |
 |---|---|---|
-| GET | `/ctl/state?session=<id>` | 全部会话 + 当前会话有效状态 |
-| POST | `/ctl/toggle` `{sessionId}` | 翻转某会话 |
-| POST | `/ctl/set` `{sessionId, enabled}` | 显式设置 |
-| POST | `/ctl/reset` `{sessionId}` | 清掉覆盖，回到默认 |
-| POST | `/ctl/default` `{enabled}` | 改默认 |
+| 企业微信群机器人（推荐） | `wecomKey` | Webhook 里 `key=` 后面那串，最简单，不需要可信 IP |
+| 企业微信应用消息 | `wecomCorpId`、`wecomSecret`、`wecomAgentId`、`wecomToUser` | 走 `gettoken` + `message/send`，需要企业微信后台配置**企业可信 IP** |
+| 钉钉群机器人 | `dingToken`、`dingSecret`（可选） | 支持加签（HmacSHA256 + timestamp） |
+| Telegram | `telegramToken`、`telegramChatId` | 调 `sendMessage`，自动关网页预览 |
+| 邮件 | `mailHost`、`mailPort`、`mailUser`、`mailPass`、`mailFrom`、`mailTo` | 内置最小 SMTP 客户端：465 直连 TLS，587 走 STARTTLS，AUTH LOGIN/PLAIN |
+| 自定义 Webhook | `webhookUrl`、`webhookAuth`（可选）、`webhookTemplate`（可选） | 默认 POST `{text,title,session,project,level,time}`；模板支持 `{{text}}` 等占位符 |
+
+密钥字段回显为 `***`，留空或保持 `***` 不会覆盖原值。配置保存在 `queueDir/settings.json`，**不会**写进仓库。
 
 ## 测试
 

@@ -1,8 +1,13 @@
 import http from 'node:http'
+import { fileURLToPath } from 'node:url'
+import { rmSync } from 'node:fs'
 import { apply } from '../index.js'
 
+const QUEUE_DIR = fileURLToPath(new URL('./.queue-harness', import.meta.url))
+rmSync(QUEUE_DIR, { recursive: true, force: true })
+
 const received = []
-const server = http.createServer((req, res) => {
+const hook = http.createServer((req, res) => {
   let body = ''
   req.on('data', (c) => { body += c })
   req.on('end', () => {
@@ -11,7 +16,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ errcode: 0, errmsg: 'ok' }))
   })
 })
-await new Promise((r) => server.listen(18083, '127.0.0.1', r))
+await new Promise((r) => hook.listen(18083, '127.0.0.1', r))
 
 const handlers = []
 const logs = []
@@ -22,12 +27,20 @@ const ctx = {
 }
 
 apply(ctx, {
-  webhookUrl: 'http://127.0.0.1:18083/send?key=test',
+  provider: 'wecom-robot',
+  wecomApiBase: 'http://127.0.0.1:18083',
+  wecomKey: 'test',
   format: 'text',
   notifyOn: 'every-turn',
-  minGapMs: 10,
-  queueDir: new URL('./.queue', import.meta.url).pathname,
+  minGapMs: 5,
+  queueDir: QUEUE_DIR,
+  controlPort: 18795,
 })
+
+const base = 'http://127.0.0.1:18795'
+await new Promise((r) => setTimeout(r, 400))
+// 默认关闭，先打开默认（等价于在设置里给未单独设置的会话开绿灯）
+await fetch(base + '/ctl/default', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }) })
 
 const session = { id: 'session-abcd1234', header: { cwd: 'D:\\aiwork\\cms' } }
 const emit = (type, data) => { for (const [name, fn] of handlers) if (name === 'session/event') fn(session, { type, data, seq: 0, time: Date.now() }) }
@@ -47,13 +60,12 @@ for (const p of received) {
   i += 1
   const c = p.text ? p.text.content : p.markdown.content
   console.log('--- part ' + i + '/' + received.length + ' · bytes=' + Buffer.byteLength(c, 'utf8') + ' ---')
-  console.log(c.slice(0, 160))
-  console.log('...')
+  console.log(c.slice(0, 80) + ' …')
 }
-server.close()
+hook.close()
 const sizes = received.map((p) => Buffer.byteLength((p.text || p.markdown).content, 'utf8'))
 const joined = received.map((p) => (p.text || p.markdown).content).join('\n')
 const complete = paragraphs.every((t) => joined.includes(t))
 const ok = received.length > 1 && sizes.every((n) => n <= 2048) && complete
 console.log('parts=' + received.length + ' sizes=' + sizes.join(',') + ' complete=' + complete + ' -> ' + (ok ? 'PASS' : 'FAIL'))
-if (!ok) process.exit(1)
+process.exit(ok ? 0 : 1)
