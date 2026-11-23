@@ -11,7 +11,8 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { PROVIDERS, deliverAll, sendNotification } from './notify.js'
+import { PROVIDERS, deliverAll, sendNotification, telegramCall } from './notify.js'
+import { createTelegramInbound } from './inbound.js'
 
 const DEFAULTS = {
   enabled: true,
@@ -26,6 +27,7 @@ const DEFAULTS = {
   telegramChatId: '',
   telegramUserId: '',
   telegramTopics: true,
+  telegramInbound: true,
   proxyUrl: '',
   format: 'text',        // text | markdown
   notifyOn: 'every-turn',
@@ -394,6 +396,40 @@ export function apply(ctx, config = {}) {
     return { ok: true, default: prefs.defaultEnabled, session: sessionId ? sessionState(sessionId) : null, state: snapshot() }
   }
 
+  // ── Telegram 入站控制（长轮询）────────────────────────────────────────────
+  let inbound = null
+  function startTelegramInbound(agentService) {
+    const effective = { ...cfg, ...settings }
+    if (!effective.telegramInbound) return
+    if (!effective.telegramToken || !effective.telegramChatId) return
+    if (inbound) return
+    inbound = createTelegramInbound({
+      cfg: effective,
+      log,
+      agents: agentService,
+      sessions,
+      prefs,
+      savePrefs,
+      store: {
+        get(key) { return prefs.inbound ? prefs.inbound[key] : undefined },
+        set(key, value) { prefs.inbound = prefs.inbound || {}; prefs.inbound[key] = value; savePrefs() },
+      },
+      api: {
+        async getUpdates(offset) {
+          const result = await telegramCall(effective, 'getUpdates', { offset, timeout: 10, allowed_updates: ['message'] })
+          if (!result.json || !result.json.ok) throw new Error('getUpdates 失败: ' + (result.json && result.json.description ? result.json.description : ('HTTP ' + result.status)))
+          return result.json.result || []
+        },
+      },
+      async sendMessage(threadId, text) {
+        const body = { chat_id: effective.telegramChatId, text, disable_web_page_preview: true }
+        if (threadId) body.message_thread_id = threadId
+        await telegramCall(effective, 'sendMessage', body)
+      },
+    })
+    inbound.start()
+  }
+
   function registerControlRoute(routeCtx) {
     const registry = routeCtx && routeCtx.connection && routeCtx.connection.fetch
     if (!registry || typeof registry.register !== 'function') {
@@ -555,6 +591,7 @@ export function apply(ctx, config = {}) {
   if (typeof ctx.effect === 'function') {
     ctx.effect(() => () => {
       try { if (typeof off === 'function') off() } catch (error) { /* ignore */ }
+      try { if (inbound) inbound.stop() } catch (error) { /* ignore */ }
     })
   }
 }

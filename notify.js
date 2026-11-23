@@ -369,6 +369,13 @@ async function sendEmail(cfg, subject, text) {
   }
 }
 
+
+/** 调任意 Telegram Bot API 方法（走 cfg.proxyUrl）。 */
+export async function telegramCall(cfg, method, params) {
+  const raw = await postJsonRaw(telegramApi(cfg, method), params || {}, cfg)
+  return { status: raw.status, json: parseJson(raw.text) }
+}
+
 export const PROVIDERS = ['wecom-robot', 'wecom-app', 'dingtalk', 'telegram', 'email', 'webhook']
 
 export async function sendNotification(cfg, text, meta = {}) {

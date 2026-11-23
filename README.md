@@ -144,6 +144,17 @@ sh scripts/install.sh
 
 镜像失败不影响主通道；主通道失败会抛错并按退避重试。
 
+## 在 Telegram 里指挥（入站控制）
+
+配好 token + chat_id 后，插件会**长轮询** `getUpdates`（出站，无需公网回调）：
+
+- 每个会话对应群里一个**话题**，你在哪个话题说话，就投给哪个会话
+- 普通文字 → 该会话**开新一轮**（`agent.followup`）
+- `! 补充指令` → 纠偏**正在执行**的 turn（`agent.steer`）
+- `/tasks` 列会话（编号 + 短号 + 标题）；`/use 2` 或 `/use 8f3a` 改绑定
+- `/status` 看当前绑定与运行状态；`/stop` 中断当前会话
+- `telegramUserId` 填了就等于白名单：其他人发什么都不理
+
 ## 测试
 
 ```bash
