@@ -261,6 +261,16 @@
               );
             }),
             h('div', { style: ROWW },
+              h('label', { style: LBL }, '工具结果上报'),
+              h('select', {
+                style: INPUT,
+                value: config.values.toolReport || 'turn',
+                onChange: function (e) { setValue('toolReport', e.target.value); }
+              }, [['turn', '每轮汇总（推荐）'], ['live', '每次工具结果单独发'], ['off', '不报工具结果']].map(function (pair) {
+                return h('option', { key: pair[0], value: pair[0] }, pair[1]);
+              }))
+            ),
+            h('div', { style: ROWW },
               h('label', { style: LBL }, '代理地址（可选，CONNECT 隧道，如 http://127.0.0.1:7890）'),
               h('input', { type: 'text', style: INPUT, placeholder: 'http://127.0.0.1:7890', value: config.values.proxyUrl || '',
                 onChange: function (e) { setValue('proxyUrl', e.target.value); } })

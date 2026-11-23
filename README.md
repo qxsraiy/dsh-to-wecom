@@ -156,6 +156,26 @@ sh scripts/install.sh
 - `/rename 新标题` 直接改 DSH 会话名，TG 话题名会自动跟着变
 - `telegramUserId` 填了就等于白名单：其他人发什么都不理
 
+## 工具结果上报
+
+默认把**本轮的工具调用**汇总进那条通知的尾部：
+
+```
+任务 #aaaa · 第 2 轮 · 8s · 工具 2 次
+
+工具：
+· bash ✓ 120ms · report.md scan.txt
+· read ✗ 8ms · not found
+```
+
+| `toolReport` | 行为 |
+|---|---|
+| `turn`（默认） | 汇总进每轮通知，最多列最近 12 次 |
+| `live` | 每次工具结果单独推一条（`⚙ #aaaa bash ✓ …`） |
+| `off` | 不报 |
+
+每行带工具名、状态（✓/✗/…）、耗时、输出前 120 字（失败时显示错误信息）。
+
 ## 审批与提问回传
 
 - **审批**：插件注册 `approval/request` waterfall。会话需要批准时，往该会话的话题发

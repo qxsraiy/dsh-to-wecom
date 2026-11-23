@@ -1,6 +1,6 @@
 {
     "name":  "dsh-wecom-notify",
-    "version":  "0.11.0",
+    "version":  "0.12.0",
     "private":  true,
     "type":  "module",
     "description":  "DeepSeek Harness 插件：TG 话题分线程 + 入站指令控制 + 企微简报镜像",
@@ -34,10 +34,9 @@
                   "cordis.patch.yml",
                   "locale/*.json",
                   "icon.svg",
-                  "scripts/check-secrets.mjs",
+                  "scripts/*.mjs",
                   "scripts/install.ps1",
                   "scripts/install.sh",
-                  "scripts/tg-selftest.mjs",
                   "docs/INSTALL.md",
                   "docs/CONFIG.md",
                   "test/*.mjs"

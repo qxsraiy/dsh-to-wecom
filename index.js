@@ -32,6 +32,7 @@ const DEFAULTS = {
   format: 'text',        // text | markdown
   notifyOn: 'every-turn',
   includeSubagents: false,
+  toolReport: 'turn',   // turn 汇总进每轮通知 | live 每次工具结果单独发 | off
   minGapMs: 3200,
   maxRetries: 5,
   textLimit: 0,          // 0 = 不截断（默认）；>0 时摘要按字符截断
@@ -55,6 +56,7 @@ function normalize(config = {}) {
   cfg.maxRetries = Number.isFinite(Number(cfg.maxRetries)) ? Number(cfg.maxRetries) : DEFAULTS.maxRetries
   cfg.textLimit = Number.isFinite(Number(cfg.textLimit)) ? Number(cfg.textLimit) : DEFAULTS.textLimit
   cfg.notifyOn = ['every-turn', 'completed', 'errors-only'].includes(cfg.notifyOn) ? cfg.notifyOn : DEFAULTS.notifyOn
+  cfg.toolReport = ['turn', 'live', 'off'].includes(cfg.toolReport) ? cfg.toolReport : DEFAULTS.toolReport
   if (!cfg.webhookUrl && cfg.webhookKey) {
     cfg.webhookUrl = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=' + cfg.webhookKey
   }
@@ -197,7 +199,7 @@ export function apply(ctx, config = {}) {
     const id = String(session && session.id ? session.id : 'unknown')
     let s = state.get(id)
     if (!s) {
-      s = { id, title: '', cwd: '', turn: 0, turnStart: 0, lastText: '', texts: [], toolCalls: 0, steps: 0, lastError: '' }
+      s = { id, title: '', cwd: '', turn: 0, turnStart: 0, lastText: '', texts: [], toolCalls: 0, steps: 0, lastError: '', tools: [] }
       state.set(id, s)
     }
     lastSessionId = id
@@ -702,6 +704,20 @@ export function apply(ctx, config = {}) {
     }
   }
 
+
+  function toolLines(s) {
+    if (cfg.toolReport === 'off') return []
+    if (!Array.isArray(s.tools) || s.tools.length === 0) return []
+    const rows = s.tools.slice(-12).map((item) => {
+      const mark = item.status === 'error' ? '✗' : (item.status === 'running' ? '…' : '✓')
+      const ms = item.ms ? (' ' + (item.ms / 1000).toFixed(1) + 's') : ''
+      const tail = item.output ? (' · ' + item.output.slice(0, 120)) : ''
+      return '· ' + item.name + ' ' + mark + ms + tail
+    })
+    if (s.tools.length > 12) rows.unshift('· 前面还有 ' + (s.tools.length - 12) + ' 次调用')
+    return ['', '工具：', ...rows]
+  }
+
   function composeText(s, info) {
     const f = facts(s, info)
     const lines = []
@@ -713,6 +729,7 @@ export function apply(ctx, config = {}) {
       lines.push('')
       lines.push(f.summary)
     }
+    lines.push(...toolLines(s))
     return lines.join('\n')
   }
 
@@ -727,6 +744,7 @@ export function apply(ctx, config = {}) {
       lines.push('')
       lines.push(escapeMd(f.summary))
     }
+    lines.push(...toolLines(s))
     return lines.join('\n')
   }
 
@@ -755,6 +773,7 @@ export function apply(ctx, config = {}) {
         s.toolCalls = 0
         s.steps = 0
         s.lastError = ''
+        s.tools = []
         return
       }
       if (event.type === 'step/start') { s.steps += 1; return }
@@ -768,11 +787,37 @@ export function apply(ctx, config = {}) {
       }
       if (event.type === 'tool/call') {
         s.toolCalls += 1
+        const callData = event.data || {}
+        const callName = String(callData.name || callData.tool || (callData.message && callData.message.name) || 'tool')
+        const callId = String(callData.callId || callData.id || (callData.message && callData.message.toolCallId) || '')
+        s.tools.push({ callId, name: callName, started: Date.now(), status: 'running', output: '' })
         const data = event.data || {}
         if (data.name === 'ask_user_question' && data.callId) {
           const questions = (data.args && Array.isArray(data.args.questions)) ? data.args.questions : []
           const agent = agentServiceRef && agentServiceRef.get ? agentServiceRef.get(s.id) : undefined
           if (questions.length) noteQuestion(s.id, data.callId, questions, agent)
+        }
+        return
+      }
+      if (event.type === 'tool/result') {
+        const data = event.data || {}
+        const message = data.message || {}
+        const callId = String(message.toolCallId || data.callId || '')
+        const record = s.tools.find((item) => item.callId && item.callId === callId) || s.tools[s.tools.length - 1]
+        if (record) {
+          const blocks = Array.isArray(message.content) ? message.content : (typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : [])
+          const output = blocks.filter((b) => b && typeof b.text === 'string').map((b) => b.text).join(' ')
+          const failed = Boolean(message.isError || data.isError || (data.error && data.error.message))
+          record.status = failed ? 'error' : 'ok'
+          record.output = (failed && data.error && data.error.message ? String(data.error.message) : output).replace(/\s+/g, ' ').trim().slice(0, 200)
+          record.ms = Date.now() - (record.started || Date.now())
+          if (cfg.toolReport === 'live') {
+            const shortId = s.id.replace(/^session-/, '').slice(0, 4)
+            enqueue('⚙ #' + shortId + ' ' + record.name + (failed ? ' ✗ ' : ' ✓ ') + (record.output ? record.output.slice(0, 160) : ''), {
+              meta: { title: s.title || 'DSH', sessionId: s.id, project: s.cwd, level: failed ? 'error' : 'info' },
+              brief: '⚙ #' + shortId + ' ' + record.name + (failed ? ' ✗' : ' ✓'),
+            })
+          }
         }
         return
       }
