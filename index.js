@@ -122,7 +122,6 @@ export function matchApprovalReply(text) {
 
 export function apply(ctx, config = {}) {
   bootMark('apply-enter', { pid: process.pid, provider: config && config.provider })
-  diag({ stage: 'apply-enter', pid: process.pid })
   const cfg = normalize(config)
   const log = ctx && ctx.logger ? ctx.logger : console
   if (!cfg.enabled) {
@@ -142,6 +141,7 @@ export function apply(ctx, config = {}) {
   const diagFile = join(queueDir, 'inbound-state.json')
 
   function diag(patch) {
+    bootMark('diag-call', { stage: patch && patch.stage })
     void (async () => {
       try {
         await mkdir(queueDir, { recursive: true })
@@ -149,7 +149,7 @@ export function apply(ctx, config = {}) {
         try { prev = JSON.parse(await readFile(diagFile, 'utf8')) } catch (error) { /* 第一次 */ }
         const next = { ...prev, ...patch, at: new Date().toISOString(), version: '0.15.0' }
         await writeFile(diagFile, JSON.stringify(next, null, 2) + '\n', 'utf8')
-      } catch (error) { /* 诊断文件失败不影响主流程 */ }
+      } catch (error) { bootMark('diag-error', { message: String(error && error.message ? error.message : error) }) }
     })()
   }
   // 面板里保存的推送配置；为空时用 patch 里的 config
@@ -342,6 +342,8 @@ export function apply(ctx, config = {}) {
     void persist()
     void pump()
   }
+
+  diag({ stage: 'apply-init', pid: process.pid })
 
   // ── 每个会话的推送开关（界面开关读写这里；按 sessionId 区分，同一目录的不同会话互不影响）
   const dataDir = cfg.queueDir || join(process.cwd(), '.dsh-wecom-notify')
@@ -942,6 +944,17 @@ export function apply(ctx, config = {}) {
       }
     } catch (error) { /* 首次启动没有队列文件 */ }
   })()
+
+  void readyPromise.then(() => {
+    bootMark('ready', { defaultEnabled: prefs.defaultEnabled, sessions: Object.keys(prefs.sessions || {}).length })
+    if (log.info) log.info('[wecom-notify] 配置已加载 · 默认推送=' + (prefs.defaultEnabled ? '开' : '关') + ' · 会话开关=' + Object.keys(prefs.sessions || {}).length + ' 条')
+    try {
+      startTelegramInbound(agentsFacade)
+    } catch (error) {
+      bootMark('inbound-start-error', { message: String(error && error.message ? error.message : error) })
+      if (log.warn) log.warn('[wecom-notify] TG 入站启动失败: ' + String(error))
+    }
+  })
 
   if (log.info) log.info('[wecom-notify] 已加载 · 通道=' + (cfg.dryRun ? 'dry-run' : 'wecom-robot') + ' · 格式=' + cfg.format + ' · 模式=' + cfg.notifyOn)
 
