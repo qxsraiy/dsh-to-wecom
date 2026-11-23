@@ -192,7 +192,7 @@ export function apply(ctx, config = {}) {
       if (merged[field]) values[field] = '***'
       else values[field] = merged[field] === undefined ? '' : merged[field]
     }
-    return { provider: merged.provider, values }
+    return { provider: merged.provider, values, profiles: settings.profiles || {} }
   }
 
   function stateOf(session) {
@@ -299,7 +299,10 @@ export function apply(ctx, config = {}) {
 
   function enqueue(content, jobMeta) {
     // 企业微信：text 2048 字节 / markdown 4096 字节。留余量，超长拆成多条并标 [i/n]。
-    const maxBytes = cfg.format === 'markdown' ? 3800 : 1800
+    const active = { ...cfg, ...settings }
+    const maxBytes = active.provider === 'telegram'
+      ? 3900                      // Telegram 单条上限 4096 字节
+      : (cfg.format === 'markdown' ? 3800 : 1800)
     const parts = packLines(content, maxBytes)
     const total = parts.length
     for (let i = 0; i < total; i += 1) {
@@ -377,7 +380,11 @@ export function apply(ctx, config = {}) {
   }
 
   // ── 控制面：挂到 DSH 自己的 /api 上（同源、带 cookie 认证，不需要任何额外端口）
+  // 启动时先读完 sessions.json / settings.json，避免界面读到默认值（重启后显示"全部关闭"就是这个原因）
+  const readyPromise = Promise.all([loadSettings(), loadPrefs()])
+
   async function handleOp(input) {
+    await readyPromise
     const op = String((input && input.op) || 'state')
     const sessionId = String((input && input.sessionId) || '')
     if (op === 'config') return { ok: true, providers: PROVIDERS, ...maskedConfig() }
@@ -389,6 +396,9 @@ export function apply(ctx, config = {}) {
         if (SECRET_FIELDS.has(key) && (value === '***' || value === '')) continue
         settings[key] = value
       }
+      // 配置单：按通道留一份快照，切走再切回能直接恢复
+      settings.profiles = settings.profiles || {}
+      settings.profiles[String(settings.provider || cfg.provider)] = { ...(settings.profiles[String(settings.provider || cfg.provider)] || {}), ...values }
       saveSettings()
       const merged = { ...cfg, ...settings }
       const warning = merged.mirror && merged.mirror === merged.provider
@@ -695,7 +705,7 @@ export function apply(ctx, config = {}) {
       project,
       shortId,
       elapsed,
-      title: s.title || project,
+      title: s.title || ('会话 #' + (s.id.replace(/^session-/, '').slice(0, 4))),
       turn: s.turn || 0,
       tools: s.toolCalls || 0,
       cwd: s.cwd || '-',
@@ -834,7 +844,7 @@ export function apply(ctx, config = {}) {
         if (wanted && sessionAllowed && (cfg.includeSubagents || !isSub)) {
           const info = reasonOf(reason)
           const shortId = s.id.replace(/^session-/, '').slice(0, 4)
-          const title = s.title || basename(s.cwd || '') || 'DSH'
+          const title = s.title || ('会话 #' + shortId)
           const brief = '[#' + shortId + '] ' + title + ' · ' + info.label + '（详情见 ' + (String(({ ...cfg, ...settings }).provider) === 'telegram' ? 'TG' : '主通道') + '）'
           enqueue(compose(s, info), { meta: { title, sessionId: s.id, project: s.cwd, level: reason.kind || 'completed' }, brief })
         }

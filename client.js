@@ -171,7 +171,7 @@
         var ROWW = { marginBottom: '10px' };
 
         function SettingsPanel() {
-          var cfgPair = react.useState({ provider: 'wecom-robot', values: {} });
+          var cfgPair = react.useState({ provider: 'wecom-robot', values: {}, profiles: {} });
           var config = cfgPair[0];
           var setConfig = cfgPair[1];
           var msgPair = react.useState('');
@@ -183,7 +183,7 @@
 
           react.useEffect(function () {
             op('config').then(function (payload) {
-              setConfig({ provider: payload.provider || 'wecom-robot', values: payload.values || {} });
+              setConfig({ provider: payload.provider || 'wecom-robot', values: payload.values || {}, profiles: payload.profiles || {} });
             }).catch(function (err) { setMessage('读取配置失败：' + String(err && err.message ? err.message : err)); });
           }, []);
 
@@ -197,12 +197,15 @@
           function pickProvider(provider) {
             var values = Object.assign({}, config.values || {});
             delete values.provider;
-            setConfig({ provider: provider, values: values });
+            // 切到某个通道时，优先用它的配置单里保存过的值
+            var saved = (config.profiles || {})[provider];
+            if (saved) values = Object.assign(values, saved);
+            setConfig({ provider: provider, values: values, profiles: config.profiles || {} });
           }
           function save() {
             setBusy('save');
             op('save-config', { provider: config.provider, values: config.values }).then(function (payload) {
-              setConfig({ provider: payload.provider || config.provider, values: payload.values || {} });
+              setConfig({ provider: payload.provider || config.provider, values: payload.values || {}, profiles: payload.profiles || config.profiles || {} });
               setMessage(payload.warning ? ('已保存，但：' + payload.warning) : '已保存');
             }).catch(function (err) { setMessage('保存失败：' + String(err && err.message ? err.message : err)); })
               .then(function () { setBusy(''); });
