@@ -267,9 +267,9 @@
               h('label', { style: LBL }, '工具结果上报'),
               h('select', {
                 style: INPUT,
-                value: config.values.toolReport || 'turn',
+                value: config.values.toolReport || 'off',
                 onChange: function (e) { setValue('toolReport', e.target.value); }
-              }, [['turn', '每轮汇总（推荐）'], ['live', '每次工具结果单独发'], ['off', '不报工具结果']].map(function (pair) {
+              }, [['off', '不报工具结果（默认）'], ['turn', '每轮汇总工具明细'], ['live', '每次工具结果单独发']].map(function (pair) {
                 return h('option', { key: pair[0], value: pair[0] }, pair[1]);
               }))
             ),

@@ -32,7 +32,7 @@ const DEFAULTS = {
   format: 'text',        // text | markdown
   notifyOn: 'every-turn',
   includeSubagents: false,
-  toolReport: 'turn',   // turn 汇总进每轮通知 | live 每次工具结果单独发 | off
+  toolReport: 'off',    // off 默认不报 | turn 汇总进每轮通知 | live 每次工具结果单独发
   minGapMs: 3200,
   maxRetries: 5,
   textLimit: 0,          // 0 = 不截断（默认）；>0 时摘要按字符截断
@@ -199,14 +199,14 @@ export function apply(ctx, config = {}) {
     const id = String(session && session.id ? session.id : 'unknown')
     let s = state.get(id)
     if (!s) {
-      s = { id, title: '', cwd: '', turn: 0, turnStart: 0, lastText: '', texts: [], toolCalls: 0, steps: 0, lastError: '', tools: [] }
+      s = { id, title: '', cwd: '', turn: 0, turnStart: 0, lastText: '', texts: [], toolCalls: 0, steps: 0, lastError: '', tools: [], firstUserText: '' }
       state.set(id, s)
     }
     lastSessionId = id
     if (!s.cwd && session && session.header && session.header.cwd) s.cwd = String(session.header.cwd)
     if (s.cwd) {
       const known = sessions.get(id)
-      if (!known || known.cwd !== s.cwd) sessions.set(id, { cwd: s.cwd, title: known ? known.title : '' })
+      if (!known || known.cwd !== s.cwd) sessions.set(id, { cwd: s.cwd, title: known ? known.title : '', firstUserText: known ? known.firstUserText : '' })
     }
     return s
   }
@@ -319,9 +319,14 @@ export function apply(ctx, config = {}) {
   const prefs = { defaultEnabled: false, sessions: {} } // sessionId -> { enabled, title, cwd, updatedAt }
   const sessions = new Map() // sessionId -> { cwd, title }
 
+  function fallbackTitleFrom(s) {
+    const text = String((s && (s.firstUserText || '')) || '').replace(/\s+/g, ' ').trim()
+    return text ? text.slice(0, 24) : ''
+  }
+
   function sessionLabel(id, record) {
     const known = sessions.get(id)
-    const title = (record && record.title) || (known && known.title) || ''
+    const title = (record && record.title) || (known && known.title) || (known && known.firstUserText ? String(known.firstUserText).slice(0, 24) : '') || ''
     const cwd = (record && record.cwd) || (known && known.cwd) || ''
     const shortId = String(id || '').replace(/^session-/, '').slice(0, 4) || '----'
     return { title: title || ('会话 #' + shortId), cwd, shortId }
@@ -385,6 +390,12 @@ export function apply(ctx, config = {}) {
 
   async function handleOp(input) {
     await readyPromise
+    if (input && (input.op === 'config' || input.op === 'save-config')) {
+      try {
+        const raw = JSON.parse(await readFile(settingsFile, 'utf8'))
+        if (raw && typeof raw === 'object') Object.assign(settings, raw)
+      } catch (error) { /* 没有文件就用内存值 */ }
+    }
     const op = String((input && input.op) || 'state')
     const sessionId = String((input && input.sessionId) || '')
     if (op === 'config') return { ok: true, providers: PROVIDERS, ...maskedConfig() }
@@ -450,7 +461,8 @@ export function apply(ctx, config = {}) {
   async function renameSessionTitle(sessionId, title) {
     const titleService = typeof ctx.get === 'function' ? ctx.get('sessionTitle') : undefined
     if (!titleService || typeof titleService.rename !== 'function') throw new Error('会话标题服务不可用')
-    const agent = agentServiceRef && agentServiceRef.get ? agentServiceRef.get(sessionId) : undefined
+    const service = agentServiceRef || agentsFacade
+    const agent = service && service.get ? service.get(sessionId) : undefined
     const session = agent && agent.session
     if (!session) throw new Error('会话不在运行')
     titleService.rename(session, title)
@@ -498,12 +510,19 @@ export function apply(ctx, config = {}) {
     try { await telegramCall(e, 'sendMessage', body) } catch (error) { if (log.warn) log.warn('[wecom-notify] 话题回执发送失败: ' + String(error)) }
   }
 
+  const agentsFacade = {
+    get(id) {
+      const service = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
+      return service && typeof service.get === 'function' ? service.get(id) : undefined
+    },
+  }
+
   function startTelegramInbound(agentService) {
     const effective = { ...cfg, ...settings }
     if (!effective.telegramInbound) return
     if (!effective.telegramToken || !effective.telegramChatId) return
     if (inbound) return
-    agentServiceRef = agentService
+    agentServiceRef = agentService || agentsFacade
     inbound = createTelegramInbound({
       cfg: effective,
       renameSession: renameSessionTitle,
@@ -705,7 +724,7 @@ export function apply(ctx, config = {}) {
       project,
       shortId,
       elapsed,
-      title: s.title || ('会话 #' + (s.id.replace(/^session-/, '').slice(0, 4))),
+      title: s.title || fallbackTitleFrom(s) || ('会话 #' + (s.id.replace(/^session-/, '').slice(0, 4))),
       turn: s.turn || 0,
       tools: s.toolCalls || 0,
       cwd: s.cwd || '-',
@@ -787,6 +806,17 @@ export function apply(ctx, config = {}) {
         return
       }
       if (event.type === 'step/start') { s.steps += 1; return }
+      if (event.type === 'user/message') {
+        const payload = event.data && (event.data.message || event.data)
+        const blocks = payload && Array.isArray(payload.content) ? payload.content : []
+        const text = blocks.filter((b) => b && typeof b.text === 'string').map((b) => b.text).join(' ').trim()
+        if (text && !s.firstUserText) {
+          s.firstUserText = text
+          const known = sessions.get(s.id) || { cwd: s.cwd, title: '' }
+          sessions.set(s.id, { cwd: known.cwd, title: known.title, firstUserText: text })
+        }
+        return
+      }
       if (event.type === 'assistant/message') {
         const text = messageText(event.data && event.data.message)
         if (text.trim()) {
@@ -844,7 +874,7 @@ export function apply(ctx, config = {}) {
         if (wanted && sessionAllowed && (cfg.includeSubagents || !isSub)) {
           const info = reasonOf(reason)
           const shortId = s.id.replace(/^session-/, '').slice(0, 4)
-          const title = s.title || ('会话 #' + shortId)
+          const title = s.title || fallbackTitleFrom(s) || ('会话 #' + shortId)
           const brief = '[#' + shortId + '] ' + title + ' · ' + info.label + '（详情见 ' + (String(({ ...cfg, ...settings }).provider) === 'telegram' ? 'TG' : '主通道') + '）'
           enqueue(compose(s, info), { meta: { title, sessionId: s.id, project: s.cwd, level: reason.kind || 'completed' }, brief })
         }

@@ -108,6 +108,10 @@ export function createTelegramInbound(options) {
       await sendMessage(threadId, '会话：' + (current.sessionId ? ('#' + shortId(current.sessionId)) : '未绑定') + '\n状态：' + (agent ? agent.status : '未知') + '\n来源：' + current.via)
       return true
     }
+    if (cmd === '/ping') {
+      await sendMessage(threadId, 'pong · 会话索引 ' + listSessions().length + ' 个')
+      return true
+    }
     if (cmd === '/rename') {
       const current = resolveTarget(message)
       if (!current.sessionId) { await sendMessage(threadId, '先 /tasks 选一个会话再改名'); return true }
