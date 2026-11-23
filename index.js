@@ -444,6 +444,48 @@ export function apply(ctx, config = {}) {
     titleService.rename(session, title)
   }
 
+  // ── 话题生命周期 <-> 会话归档 ────────────────────────────────────────────
+  function workspaceRegistry() {
+    const registry = typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined
+    return registry && typeof registry.archiveSession === 'function' ? registry : undefined
+  }
+
+  async function archiveByTopic(sessionId, chatId, threadId) {
+    if (!sessionId) { await tgSendToSafe(chatId, threadId, '这个话题没绑定 DSH 会话，先 /use 选一个'); return }
+    const registry = workspaceRegistry()
+    if (!registry) { await tgSendToSafe(chatId, threadId, '这个 DSH 没有工作区归档服务'); return }
+    try {
+      await registry.archiveSession(sessionId, { stopActivity: true })
+      await tgSendToSafe(chatId, threadId, '已归档 #' + String(sessionId).replace(/^session-/, '').slice(0, 4))
+    } catch (error) {
+      await tgSendToSafe(chatId, threadId, '归档失败：' + String(error && error.message ? error.message : error))
+    }
+  }
+
+  async function unarchiveByTopic(sessionId, chatId, threadId) {
+    if (!sessionId) { await tgSendToSafe(chatId, threadId, '这个话题没绑定 DSH 会话'); return }
+    const registry = workspaceRegistry()
+    if (!registry || typeof registry.unarchiveSession !== 'function') { await tgSendToSafe(chatId, threadId, '这个 DSH 没有反归档服务'); return }
+    try {
+      await registry.unarchiveSession(sessionId)
+      await tgSendToSafe(chatId, threadId, '已解除归档 #' + String(sessionId).replace(/^session-/, '').slice(0, 4))
+    } catch (error) {
+      await tgSendToSafe(chatId, threadId, '解除归档失败：' + String(error && error.message ? error.message : error))
+    }
+  }
+
+  async function topicCreated() {
+    // 新建话题：DSH 侧建会话需要完整的工作区/预设上下文，这里只提示，不硬造会话。
+  }
+
+  async function tgSendToSafe(chatId, threadId, text) {
+    const e = { ...cfg, ...settings }
+    if (!e.telegramToken) return
+    const body = { chat_id: chatId || e.telegramChatId, text, disable_web_page_preview: true }
+    if (threadId) body.message_thread_id = Number(threadId)
+    try { await telegramCall(e, 'sendMessage', body) } catch (error) { if (log.warn) log.warn('[wecom-notify] 话题回执发送失败: ' + String(error)) }
+  }
+
   function startTelegramInbound(agentService) {
     const effective = { ...cfg, ...settings }
     if (!effective.telegramInbound) return
@@ -453,6 +495,9 @@ export function apply(ctx, config = {}) {
     inbound = createTelegramInbound({
       cfg: effective,
       renameSession: renameSessionTitle,
+      onTopicClosed: archiveByTopic,
+      onTopicReopened: unarchiveByTopic,
+      onTopicCreated: topicCreated,
       resolveReply: resolveReplyFromTelegram,
       log,
       agents: agentService,

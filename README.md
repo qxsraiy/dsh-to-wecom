@@ -165,6 +165,15 @@ sh scripts/install.sh
   插件调用 `userQuestions.answer()` 回填（DSH 前台等待超时转为「继续态」后生效，最多重试 60 秒）。
 - 审批只在**审批策略 = `ask`** 的会话触发；`never` 的会话（如 danger-full-access + approval never）不会弹。
 
+## 话题与会话生命周期
+
+| Telegram 操作 | 插件行为 |
+|---|---|
+| **关闭（Lock）话题** | 归档对应 DSH 会话（`workspaceRegistry.archiveSession(id, { stopActivity: true })`），话题里回执「已归档 #xxxx」 |
+| **重新打开（Unlock）话题** | 解除归档（`unarchiveSession`），回执「已解除归档 #xxxx」 |
+| **删除话题** | ⚠️ Telegram 不会给 bot 发送任何删除事件，插件无从得知；请用「关闭」代替（关闭=归档，且随时可解锁恢复） |
+| **新建话题** | 目前只记录，不会自动建会话：DSH 侧新建会话需要完整的工作区/预设上下文，硬造容易产生孤儿会话；请先在 DSH 界面开会话，首次通知会自动为它建话题 |
+
 ## 测试
 
 ```bash

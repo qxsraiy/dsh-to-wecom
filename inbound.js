@@ -17,7 +17,7 @@ function textOf(message) {
 }
 
 export function createTelegramInbound(options) {
-  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage, renameSession, resolveReply } = options
+  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage, renameSession, resolveReply, onTopicClosed, onTopicReopened, onTopicCreated } = options
   let offset = Number(store.get('offset') || 0)
   let running = false
   let timer = null
@@ -138,6 +138,23 @@ export function createTelegramInbound(options) {
     if (!message) return
     const from = message.from || {}
     if (from.is_bot) return
+
+    // 话题生命周期服务消息（关闭/重开/新建）。注意：Telegram 删除话题不会给 bot 事件。
+    const threadOf = message.message_thread_id
+    if (message.forum_topic_closed || message.forum_topic_reopened || message.forum_topic_created) {
+      const allowedCtrl = String(cfg.telegramUserId || '').trim()
+      if (allowedCtrl && String(from.id) !== allowedCtrl) return
+      const chatId0 = message.chat && message.chat.id
+      const current = resolveTarget(message)
+      if (message.forum_topic_closed && typeof onTopicClosed === 'function') {
+        await onTopicClosed(current.sessionId || '', chatId0, threadOf)
+      } else if (message.forum_topic_reopened && typeof onTopicReopened === 'function') {
+        await onTopicReopened(current.sessionId || '', chatId0, threadOf)
+      } else if (message.forum_topic_created && typeof onTopicCreated === 'function') {
+        await onTopicCreated(current.sessionId || '', chatId0, threadOf, message.forum_topic_created)
+      }
+      return
+    }
     const allowed = String(cfg.telegramUserId || '').trim()
     if (allowed && String(from.id) !== allowed) {
       if (log && log.info) log.info('[wecom-notify] 忽略非白名单 TG 用户 ' + String(from.id))
