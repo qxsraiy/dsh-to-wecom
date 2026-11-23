@@ -127,11 +127,22 @@ sh scripts/install.sh
 | 企业微信群机器人（推荐） | `wecomKey` | Webhook 里 `key=` 后面那串，最简单，不需要可信 IP |
 | 企业微信应用消息 | `wecomCorpId`、`wecomSecret`、`wecomAgentId`、`wecomToUser` | 走 `gettoken` + `message/send`，需要企业微信后台配置**企业可信 IP** |
 | 钉钉群机器人 | `dingToken`、`dingSecret`（可选） | 支持加签（HmacSHA256 + timestamp） |
-| Telegram | `telegramToken`、`telegramChatId` | 调 `sendMessage`，自动关网页预览 |
+| Telegram | `telegramToken`、`telegramChatId`（必填）、`telegramUserId`、`proxyUrl` | 每个 DSH 会话自动建一个**话题（topic）**，全文发进对应话题；支持 HTTP 代理（CONNECT 隧道） |
 | 邮件 | `mailHost`、`mailPort`、`mailUser`、`mailPass`、`mailFrom`、`mailTo` | 内置最小 SMTP 客户端：465 直连 TLS，587 走 STARTTLS，AUTH LOGIN/PLAIN |
 | 自定义 Webhook | `webhookUrl`、`webhookAuth`（可选）、`webhookTemplate`（可选） | 默认 POST `{text,title,session,project,level,time}`；模板支持 `{{text}}` 等占位符 |
 
 密钥字段回显为 `***`，留空或保持 `***` 不会覆盖原值。配置保存在 `queueDir/settings.json`，**不会**写进仓库。
+
+### 双通道：TG 全文 + 企微简报
+
+设置页里有「镜像通道」：主通道（如 Telegram）发全文并落到该会话自己的话题里，
+镜像通道（如企业微信群机器人）只发一句 `[#8f3a] CMS 扫描 · 完成（详情见 TG）`。
+
+```json
+{ "provider": "telegram", "mirror": "wecom-robot", "wecomKey": "你的 key" }
+```
+
+镜像失败不影响主通道；主通道失败会抛错并按退避重试。
 
 ## 测试
 

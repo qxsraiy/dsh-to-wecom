@@ -1,9 +1,9 @@
 {
   "name": "dsh-wecom-notify",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
-  "description": "DeepSeek Harness 插件：每轮输出后推送通知（6 通道），会话级开关走同源 /api，无额外端口",
+  "description": "DeepSeek Harness 插件：TG 话题分线程 + 企微简报镜像，6 通道，会话级开关走同源 /api",
   "license": "MIT",
   "author": "qxsraiy",
   "homepage": "https://github.com/qxsraiy/dsh-to-wecom",
@@ -42,7 +42,8 @@
     "test:chunk": "node test/harness.mjs",
     "test:control": "node test/control-test.mjs",
     "test:send": "node test/send-test.mjs",
-    "check:secrets": "node scripts/check-secrets.mjs ."
+    "check:secrets": "node scripts/check-secrets.mjs .",
+    "test:dual": "node test/dual-test.mjs"
   },
   "dsh": {
     "id": "dsh-wecom-notify",

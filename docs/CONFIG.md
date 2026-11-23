@@ -27,11 +27,18 @@
 | wecom-robot | `POST {wecomApiBase}/cgi-bin/webhook/send?key=` | `wecomApiBase` 可指向自建 mock，便于测试 |
 | wecom-app | `GET /cgi-bin/gettoken` → `POST /cgi-bin/message/send` | access_token 缓存至过期前 1 分钟 |
 | dingtalk | `POST /robot/send?access_token=&timestamp=&sign=` | sign = base64(HmacSHA256(secret, timestamp + '\n' + secret))，再 urlEncode |
-| telegram | `POST /bot<token>/sendMessage` | 429/5xx 视为可重试 |
+| telegram | `POST /bot<token>/createForumTopic` → `POST /bot<token>/sendMessage`（带 `message_thread_id`） | 会话首次通知自动建话题；429/5xx 可重试；`proxyUrl` 走 CONNECT 隧道 |
 | email | SMTP | 465 隐式 TLS / 587 STARTTLS；AUTH LOGIN 失败回落 PLAIN；正文 base64 |
 | webhook | 任意 URL | 默认 JSON，`{{text}}/{{title}}/{{session}}/{{project}}/{{level}}/{{time}}` 占位 |
 
 配置优先级：**面板保存的 `settings.json` > patch 里的 `config`**。密钥字段面板只回显 `***`。
+
+## 双通道与话题映射
+
+- 主通道发全文；镜像通道只发简报（`[#短号] 标题 · 状态（详情见 主通道）`）。
+- Telegram 话题号按 `sessionId` 缓存在 `data/sessions.json` 的 `topics` 字段，重启不丢。
+- 建话题失败（例如机器人不是管理员）不阻塞发送：退回该群的主线程。
+- 代理：`proxyUrl` 非空时所有 Telegram 请求走自实现 CONNECT 隧道（Node 的 fetch 不读系统代理）。
 
 ## 为什么按字节分段
 

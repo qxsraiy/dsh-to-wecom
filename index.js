@@ -11,7 +11,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { PROVIDERS, sendNotification } from './notify.js'
+import { PROVIDERS, deliverAll, sendNotification } from './notify.js'
 
 const DEFAULTS = {
   enabled: true,
@@ -19,6 +19,14 @@ const DEFAULTS = {
   provider: 'wecom-robot',
   webhookUrl: '',
   webhookKey: '',
+  // 主通道之外再推一条简报的镜像通道（例如 telegram 发全文、wecom-robot 只发一句）
+  mirror: '',
+  telegramApiBase: '',
+  telegramToken: '',
+  telegramChatId: '',
+  telegramUserId: '',
+  telegramTopics: true,
+  proxyUrl: '',
   format: 'text',        // text | markdown
   notifyOn: 'every-turn',
   includeSubagents: false,
@@ -128,6 +136,15 @@ export function apply(ctx, config = {}) {
     })()
   }
 
+  const topicStore = {
+    get(sessionId) { return prefs.topics && prefs.topics[sessionId] },
+    set(sessionId, threadId) {
+      prefs.topics = prefs.topics || {}
+      prefs.topics[sessionId] = threadId
+      savePrefs()
+    },
+  }
+
   function maskedConfig() {
     const values = {}
     const merged = { ...cfg, ...settings }
@@ -155,7 +172,7 @@ export function apply(ctx, config = {}) {
     return s
   }
 
-  async function send(content, meta) {
+  async function send(content, meta, brief) {
     if (cfg.dryRun) {
       if (log.info) log.info('[wecom-notify][dry-run] ' + content.replace(/\n/g, ' | '))
       return
@@ -163,7 +180,8 @@ export function apply(ctx, config = {}) {
     // patch 配置 < 面板设置（settings.json），面板里改的优先
     const effective = { ...cfg, ...settings }
     effective.provider = PROVIDERS.includes(effective.provider) ? effective.provider : cfg.provider
-    await sendNotification(effective, content, meta || {})
+    effective.__topicStore = topicStore
+    await deliverAll(effective, { full: content, brief: brief || content }, meta || {})
   }
 
   async function persist() {
@@ -182,7 +200,7 @@ export function apply(ctx, config = {}) {
       while (queue.length > 0) {
         const job = queue[0]
         try {
-          await send(job.content, job.meta)
+          await send(job.content, job.meta, job.brief)
           queue.shift()
         } catch (error) {
           job.attempts += 1
@@ -247,7 +265,7 @@ export function apply(ctx, config = {}) {
     const total = parts.length
     for (let i = 0; i < total; i += 1) {
       const prefix = total > 1 ? '[' + (i + 1) + '/' + total + '] ' : ''
-      queue.push({ content: prefix + parts[i], attempts: 0, meta: jobMeta })
+      queue.push({ content: prefix + parts[i], attempts: 0, meta: jobMeta && jobMeta.meta, brief: jobMeta && jobMeta.brief })
     }
     void persist()
     void pump()
@@ -501,7 +519,11 @@ export function apply(ctx, config = {}) {
           || (cfg.notifyOn === 'errors-only' && kind === 'error')
         const sessionAllowed = shouldNotify(s.id)
         if (wanted && sessionAllowed && (cfg.includeSubagents || !isSub)) {
-          enqueue(compose(s, reasonOf(reason)), { title: s.title || basename(s.cwd || '') || 'DSH', sessionId: s.id, project: s.cwd, level: reason.kind || 'completed' })
+          const info = reasonOf(reason)
+          const shortId = s.id.replace(/^session-/, '').slice(0, 4)
+          const title = s.title || basename(s.cwd || '') || 'DSH'
+          const brief = '[#' + shortId + '] ' + title + ' · ' + info.label + '（详情见 ' + (String(({ ...cfg, ...settings }).provider) === 'telegram' ? 'TG' : '主通道') + '）'
+          enqueue(compose(s, info), { meta: { title, sessionId: s.id, project: s.cwd, level: reason.kind || 'completed' }, brief })
         }
       }
     } catch (error) {

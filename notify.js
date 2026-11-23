@@ -8,6 +8,93 @@ import { connect as netConnect } from 'node:net'
 import { connect as tlsConnect } from 'node:tls'
 
 const TIMEOUT_MS = 15000
+// ── 可选代理（HTTP CONNECT 隧道），Node 的 fetch 不读系统代理 ────────────────
+import { connect as netConnect2 } from 'node:net'
+import { connect as tlsConnect2 } from 'node:tls'
+
+function parseProxy(url) {
+  const u = new URL(url)
+  return { host: u.hostname, port: Number(u.port || (u.protocol === 'https:' ? 443 : 80)), auth: u.username ? (u.username + ':' + u.password) : '' }
+}
+
+async function requestThroughProxy(proxy, target, body) {
+  const targetUrl = new URL(target)
+  const secure = targetUrl.protocol === 'https:'
+  const host = targetUrl.hostname
+  const port = Number(targetUrl.port || (secure ? 443 : 80))
+  const socket = await new Promise((resolve, reject) => {
+    const s = netConnect2({ host: proxy.host, port: proxy.port }, () => resolve(s))
+    s.setTimeout(TIMEOUT_MS, () => { s.destroy(); reject(failure('代理连接超时', true)) })
+    s.once('error', (e) => reject(failure('代理连接失败: ' + e.message, true)))
+  })
+  try {
+    const authHeader = proxy.auth ? ('Proxy-Authorization: Basic ' + Buffer.from(proxy.auth).toString('base64') + '\r\n') : ''
+    socket.write('CONNECT ' + host + ':' + port + ' HTTP/1.1\r\nHost: ' + host + ':' + port + '\r\n' + authHeader + '\r\n')
+    await new Promise((resolve, reject) => {
+      let buf = ''
+      const onData = (chunk) => {
+        buf += chunk.toString('latin1')
+        if (!buf.includes('\r\n\r\n')) return
+        socket.removeListener('data', onData)
+        const status = Number(buf.split(' ')[1])
+        if (status === 200) resolve()
+        else reject(failure('代理 CONNECT 失败: HTTP ' + status, status === 407))
+      }
+      socket.on('data', onData)
+    })
+    let stream = socket
+    if (secure) {
+      stream = tlsConnect2({ socket, servername: host })
+      await new Promise((resolve, reject) => { stream.once('secureConnect', resolve); stream.once('error', reject) })
+    }
+    const payload = Buffer.from(body, 'utf8')
+    stream.write('POST ' + (targetUrl.pathname + targetUrl.search) + ' HTTP/1.1\r\nHost: ' + host + '\r\ncontent-type: application/json\r\ncontent-length: ' + payload.length + '\r\nconnection: close\r\n\r\n')
+    stream.write(payload)
+    const raw = await new Promise((resolve, reject) => {
+      const chunks = []
+      stream.on('data', (c) => chunks.push(c))
+      stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+      stream.on('error', (e) => reject(failure('代理读取失败: ' + e.message, true)))
+    })
+    const split = raw.indexOf('\r\n\r\n')
+    const head = split >= 0 ? raw.slice(0, split) : raw
+    const text = split >= 0 ? raw.slice(split + 4) : ''
+    const status = Number(head.split(' ')[1])
+    return { status, text }
+  } finally {
+    try { socket.destroy() } catch (error) { /* ignore */ }
+  }
+}
+
+/** 统一 POST JSON：有 proxyUrl 走隧道，否则用全局 fetch。返回 { status, text }。 */
+async function postJsonRaw(url, body, cfg) {
+  const payload = typeof body === 'string' ? body : JSON.stringify(body || {})
+  if (cfg && cfg.proxyUrl) {
+    const result = await requestThroughProxy(parseProxy(cfg.proxyUrl), url, payload)
+    return result
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: payload,
+    signal: timeoutSignal(),
+  })
+  return { status: res.status, text: await res.text() }
+}
+
+/** 统一 GET JSON（代理同样支持）。 */
+async function getJsonRaw(url, cfg) {
+  if (cfg && cfg.proxyUrl) {
+    return await requestThroughProxy(parseProxy(cfg.proxyUrl), url, '')
+  }
+  const res = await fetch(url, { signal: timeoutSignal() })
+  return { status: res.status, text: await res.text() }
+}
+
+function parseJson(text) {
+  try { return JSON.parse(text) } catch (error) { return { raw: text } }
+}
+
 
 function timeoutSignal(ms = TIMEOUT_MS) {
   return AbortSignal.timeout(ms)
@@ -109,17 +196,43 @@ async function sendDingTalk(cfg, text) {
 }
 
 // ── Telegram ──────────────────────────────────────────────────────────────
-async function sendTelegram(cfg, text) {
+function telegramApi(cfg, method) {
+  const base = String(cfg.telegramApiBase || 'https://api.telegram.org').replace(/\/+$/, '')
+  return base + '/bot' + String(cfg.telegramToken || '').trim() + '/' + method
+}
+
+/** 取（或创建）某个 DSH 会话对应的 TG 话题线程号。 */
+async function ensureTelegramTopic(cfg, meta) {
+  if (!cfg.telegramTopics) return undefined
+  const sessionId = String((meta && meta.sessionId) || '')
+  if (!sessionId) return undefined
+  const store = cfg.__topicStore
+  const key = sessionId
+  const cached = store && store.get(key)
+  if (cached) return cached
+  const chatId = String(cfg.telegramChatId || '').trim()
+  const shortId = sessionId.replace(/^session-/, '').slice(0, 4)
+  const name = ('[#' + shortId + '] ' + String((meta && meta.title) || '会话')).slice(0, 120)
+  const raw = await postJsonRaw(telegramApi(cfg, 'createForumTopic'), { chat_id: chatId, name }, cfg)
+  const json = parseJson(raw.text)
+  if (!json.ok) throw failure('Telegram 建话题失败: ' + (json.description || ('HTTP ' + raw.status)), raw.status >= 500)
+  const threadId = json.result && json.result.message_thread_id
+  if (store && threadId) store.set(key, threadId)
+  return threadId
+}
+
+async function sendTelegram(cfg, text, meta) {
   const token = String(cfg.telegramToken || '').trim()
   const chatId = String(cfg.telegramChatId || '').trim()
   if (!token || !chatId) throw failure('未配置 Telegram bot token / chat_id')
-  const url = 'https://api.telegram.org/bot' + token + '/sendMessage'
-  const { json, status } = await postJson(url, { chat_id: chatId, text, disable_web_page_preview: true })
-  if (!json.ok) {
-    const desc = json.description || ('HTTP ' + status)
-    throw failure('Telegram 失败: ' + desc, status === 429 || status >= 500)
-  }
-  return { channel: 'telegram', ok: true }
+  let threadId
+  try { threadId = await ensureTelegramTopic(cfg, meta) } catch (error) { threadId = undefined }
+  const body = { chat_id: chatId, text, disable_web_page_preview: true }
+  if (threadId) body.message_thread_id = threadId
+  const raw = await postJsonRaw(telegramApi(cfg, 'sendMessage'), body, cfg)
+  const json = parseJson(raw.text)
+  if (!json.ok) throw failure('Telegram 失败: ' + (json.description || ('HTTP ' + raw.status)), raw.status === 429 || raw.status >= 500)
+  return { channel: 'telegram', ok: true, threadId }
 }
 
 // ── 自定义 webhook ────────────────────────────────────────────────────────
@@ -264,9 +377,38 @@ export async function sendNotification(cfg, text, meta = {}) {
     case 'wecom-robot': return await sendWecomRobot(cfg, text)
     case 'wecom-app': return await sendWecomApp(cfg, text)
     case 'dingtalk': return await sendDingTalk(cfg, text)
-    case 'telegram': return await sendTelegram(cfg, text)
+    case 'telegram': return await sendTelegram(cfg, text, meta)
     case 'email': return await sendEmail(cfg, meta.title ? ('[DSH] ' + meta.title) : '[DSH] 任务通知', text)
     case 'webhook': return await sendWebhook(cfg, text, meta)
     default: throw failure('未知的推送服务: ' + provider)
   }
+}
+
+/**
+ * 一次通知投递：主通道发全文，镜像通道只发简报。
+ * @param cfg - 生效配置（provider 为主通道）
+ * @param payload - { full, brief }
+ * @param meta - { title, sessionId, project, level }
+ */
+export async function deliverAll(cfg, payload, meta = {}) {
+  const results = []
+  const primary = PROVIDERS.includes(cfg.provider) ? cfg.provider : 'wecom-robot'
+  try {
+    results.push(await sendNotification({ ...cfg, provider: primary }, payload.full, meta))
+  } catch (error) {
+    if (primary === 'wecom-robot' && cfg.wecomKey) {
+      try { results.push(await sendNotification({ ...cfg, provider: 'wecom-robot' }, payload.brief, meta)) } catch (ignored) { /* ignore */ }
+      throw error
+    }
+    throw error
+  }
+  const mirror = String(cfg.mirror || '')
+  if (mirror && mirror !== primary && PROVIDERS.includes(mirror)) {
+    try {
+      results.push(await sendNotification({ ...cfg, provider: mirror }, payload.brief, meta))
+    } catch (error) {
+      results.push({ channel: mirror, ok: false, error: String(error && error.message ? error.message : error) })
+    }
+  }
+  return results
 }

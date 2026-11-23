@@ -124,7 +124,8 @@
           ],
           'telegram': [
             { key: 'telegramToken', label: 'Bot Token', placeholder: '123456:ABC-DEF...', secret: true, required: true },
-            { key: 'telegramChatId', label: 'chat_id', placeholder: '你的 user id 或 -100xxx 群 id', required: true }
+            { key: 'telegramChatId', label: 'chat_id（群是 -100xxx）', placeholder: '-1001234567890', required: true },
+            { key: 'telegramUserId', label: '你的 user id（白名单，可留空）', placeholder: '12345678' }
           ],
           'email': [
             { key: 'mailHost', label: 'SMTP 服务器', placeholder: 'smtp.example.com', required: true },
@@ -139,6 +140,18 @@
             { key: 'webhookAuth', label: 'Authorization 头（可选）', placeholder: 'Bearer xxx', secret: true },
             { key: 'webhookTemplate', label: 'JSON 模板（可选）', placeholder: '{"text":"{{text}}"}', multiline: true }
           ]
+        };
+        var MIRROR_LABELS = {
+          '': '不镜像（只发主通道）',
+          'wecom-robot': '企业微信群机器人（简报）',
+          'dingtalk': '钉钉机器人（简报）',
+          'email': '邮件（简报）'
+        };
+        var MIRROR_FIELDS = { 'wecom-robot': ['wecomKey'], 'dingtalk': ['dingToken'], 'email': ['mailTo'] };
+        var EXTRA_FIELD_LABELS = {
+          wecomKey: { label: '企微群机器人 key', placeholder: 'key= 后面那串', secret: true },
+          dingToken: { label: '钉钉 access_token', secret: true },
+          mailTo: { label: '收件人', placeholder: 'a@x.com' }
         };
         var PROVIDER_LABELS = {
           'wecom-robot': '企业微信群机器人（推荐）',
@@ -224,6 +237,29 @@
               }, Object.keys(PROVIDER_LABELS).map(function (key) {
                 return h('option', { key: key, value: key }, PROVIDER_LABELS[key]);
               }))
+            ),
+            h('div', { style: ROWW },
+              h('label', { style: LBL }, '镜像通道（同一事件再发一条简报，例如 TG 全文 + 企微简报）'),
+              h('select', {
+                style: INPUT,
+                value: config.values.mirror || '',
+                onChange: function (e) { setValue('mirror', e.target.value); }
+              }, Object.keys(MIRROR_LABELS).map(function (key) {
+                return h('option', { key: key, value: key }, MIRROR_LABELS[key]);
+              }))
+            ),
+            (MIRROR_FIELDS[config.values.mirror || ''] || []).map(function (key) {
+              var field = EXTRA_FIELD_LABELS[key] || { label: key };
+              return h('div', { key: 'mirror-' + key, style: ROWW },
+                h('label', { style: LBL }, '镜像 · ' + field.label),
+                h('input', { type: 'text', style: INPUT, placeholder: field.placeholder || '', value: config.values[key] || '',
+                  onChange: function (e) { setValue(key, e.target.value); } })
+              );
+            }),
+            h('div', { style: ROWW },
+              h('label', { style: LBL }, '代理地址（可选，CONNECT 隧道，如 http://127.0.0.1:7890）'),
+              h('input', { type: 'text', style: INPUT, placeholder: 'http://127.0.0.1:7890', value: config.values.proxyUrl || '',
+                onChange: function (e) { setValue('proxyUrl', e.target.value); } })
             ),
             rows,
             h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '12px' } },
