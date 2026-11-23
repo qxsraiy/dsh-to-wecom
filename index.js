@@ -350,7 +350,11 @@ export function apply(ctx, config = {}) {
         settings[key] = value
       }
       saveSettings()
-      return { ok: true, providers: PROVIDERS, ...maskedConfig() }
+      const merged = { ...cfg, ...settings }
+      const warning = merged.mirror && merged.mirror === merged.provider
+        ? '主通道和镜像通道是同一个（' + String(merged.provider) + '），镜像会被跳过；镜像请选另一个通道'
+        : ''
+      return { ok: true, warning, providers: PROVIDERS, ...maskedConfig() }
     }
     if (op === 'test') {
       const effective = { ...cfg, ...settings }

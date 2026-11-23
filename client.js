@@ -199,7 +199,7 @@
             setBusy('save');
             op('save-config', { provider: config.provider, values: config.values }).then(function (payload) {
               setConfig({ provider: payload.provider || config.provider, values: payload.values || {} });
-              setMessage('已保存');
+              setMessage(payload.warning ? ('已保存，但：' + payload.warning) : '已保存');
             }).catch(function (err) { setMessage('保存失败：' + String(err && err.message ? err.message : err)); })
               .then(function () { setBusy(''); });
           }
