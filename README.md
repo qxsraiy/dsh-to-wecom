@@ -40,32 +40,21 @@ DSH Host 插件 ──(turn/end 事件)──► 组包 + 分段 + 队列 ──
 错误 connect ETIMEDOUT 10.0.0.9:443
 ```
 
-## 安装
-
-### 方式 A：装进 profile（推荐）
+## 部署（三步）
 
 ```bash
-# 以本仓库目录作为插件包
-dsh plugin --profile desktop add "file:D:/path/to/dsh-to-wecom"
+git clone https://github.com/qxsraiy/dsh-to-wecom.git && cd dsh-to-wecom
+# Windows
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
+# macOS / Linux
+sh scripts/install.sh
 ```
 
-然后把它加进 profile 的 bundle 列表（`$DSH_HOME/profiles/<profile>/package.json`）：
+然后**完全退出 DSH 再启动** → 设置 → 插件 → **通知推送** 填自己的凭据 → 「发送测试」。
 
-```json
-"dsh": { "profile": { "bundles": ["...", "dsh-wecom-notify"] } }
-```
+插件的凭据、profile 位置、手工安装步骤、升级、卸载、排错，全在 **[docs/INSTALL.md](docs/INSTALL.md)**。
 
-重启 DSH（新 bundle 只在启动时组合）。
-
-### 方式 B：本地目录 junction（开发/自己用最省事）
-
-```powershell
-New-Item -ItemType Junction `
-  -Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-wecom-notify" `
-  -Target "D:\path\to\dsh-to-wecom"
-```
-
-再改 profile 的 `package.json`（dependencies 加 `"dsh-wecom-notify": "link:D:/path/to/dsh-to-wecom"`，bundles 加同名项）。
+脚本做的事（等价手工操作）：在 `<profile>/node_modules` 建一个指向本仓库的链接，并在 `<profile>/package.json` 的 `dependencies` 与 `dsh.profile.bundles` 里登记 `dsh-wecom-notify`（写前备份 `.bak-dsh-to-wecom`）。
 
 ## 配置
 
