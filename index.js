@@ -125,6 +125,19 @@ export function apply(ctx, config = {}) {
   const queueDir = cfg.queueDir || join(process.cwd(), '.dsh-wecom-notify')
   const queueFile = join(queueDir, 'pending.jsonl')
   const settingsFile = join(queueDir, 'settings.json')
+  const diagFile = join(queueDir, 'inbound-state.json')
+
+  function diag(patch) {
+    void (async () => {
+      try {
+        await mkdir(queueDir, { recursive: true })
+        let prev = {}
+        try { prev = JSON.parse(await readFile(diagFile, 'utf8')) } catch (error) { /* 第一次 */ }
+        const next = { ...prev, ...patch, at: new Date().toISOString(), version: '0.15.0' }
+        await writeFile(diagFile, JSON.stringify(next, null, 2) + '\n', 'utf8')
+      } catch (error) { /* 诊断文件失败不影响主流程 */ }
+    })()
+  }
   // 面板里保存的推送配置；为空时用 patch 里的 config
   const settings = {}
   const SECRET_FIELDS = new Set(['wecomKey', 'wecomSecret', 'dingSecret', 'telegramToken', 'mailPass', 'webhookAuth'])
@@ -162,7 +175,10 @@ export function apply(ctx, config = {}) {
     const threadId = prefs.topics && prefs.topics[sessionId]
     if (!threadId) return
     const effective = { ...cfg, ...settings }
-    if (!effective.telegramToken || !effective.telegramChatId) return
+    if (!effective.telegramToken || !effective.telegramChatId) {
+      diag({ stage: 'skip-missing-config', hasToken: Boolean(effective.telegramToken), hasChat: Boolean(effective.telegramChatId) })
+      return
+    }
     if (effective.provider !== 'telegram' && effective.mirror !== 'telegram') return
     const shortId = String(sessionId).replace(/^session-/, '').slice(0, 4)
     const name = ('[#' + shortId + '] ' + String(title || '')).slice(0, 120)
@@ -398,6 +414,11 @@ export function apply(ctx, config = {}) {
     }
     const op = String((input && input.op) || 'state')
     const sessionId = String((input && input.sessionId) || '')
+    if (op === 'inbound') {
+      let state = null
+      try { state = JSON.parse(await readFile(diagFile, 'utf8')) } catch (error) { state = null }
+      return { ok: true, running: Boolean(inbound), state }
+    }
     if (op === 'config') return { ok: true, providers: PROVIDERS, ...maskedConfig() }
     if (op === 'save-config') {
       if (input.provider && PROVIDERS.includes(input.provider)) settings.provider = input.provider
@@ -518,8 +539,12 @@ export function apply(ctx, config = {}) {
   }
 
   function startTelegramInbound(agentService) {
+    diag({ stage: 'start-attempt' })
     const effective = { ...cfg, ...settings }
-    if (!effective.telegramInbound) return
+    if (!effective.telegramInbound) {
+      diag({ stage: 'skip-inbound-disabled' })
+      return
+    }
     if (!effective.telegramToken || !effective.telegramChatId) return
     if (inbound) return
     agentServiceRef = agentService || agentsFacade
@@ -529,6 +554,7 @@ export function apply(ctx, config = {}) {
       onTopicClosed: archiveByTopic,
       onTopicReopened: unarchiveByTopic,
       onTopicCreated: topicCreated,
+      diag,
       resolveReply: resolveReplyFromTelegram,
       log,
       agents: agentService,
@@ -553,6 +579,7 @@ export function apply(ctx, config = {}) {
       },
     })
     inbound.start()
+    diag({ stage: 'started', provider: effective.provider, proxy: Boolean(effective.proxyUrl), chat: effective.telegramChatId })
   }
 
 

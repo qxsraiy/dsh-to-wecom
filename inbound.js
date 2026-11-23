@@ -17,7 +17,7 @@ function textOf(message) {
 }
 
 export function createTelegramInbound(options) {
-  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage, renameSession, resolveReply, onTopicClosed, onTopicReopened, onTopicCreated } = options
+  const { cfg, api, log, store, agents, sessions, savePrefs, prefs, sendMessage, renameSession, resolveReply, onTopicClosed, onTopicReopened, onTopicCreated, diag } = options
   let offset = Number(store.get('offset') || 0)
   let running = false
   let timer = null
@@ -216,8 +216,13 @@ export function createTelegramInbound(options) {
 
   async function loop() {
     if (!running) return
-    try { await pollOnce() } catch (error) {
-      if (log && log.warn) log.warn('[wecom-notify] TG 轮询失败: ' + String(error && error.message ? error.message : error))
+    try {
+      const count = await pollOnce()
+      if (typeof diag === 'function') diag({ stage: 'polling', updates: count, offset })
+    } catch (error) {
+      const message = String(error && error.message ? error.message : error)
+      if (log && log.warn) log.warn('[wecom-notify] TG 轮询失败: ' + message)
+      if (typeof diag === 'function') diag({ stage: 'poll-error', lastError: message, offset })
       await new Promise((resolve) => setTimeout(resolve, 5000))
     }
     if (running) timer = setTimeout(() => { void loop() }, 200)
