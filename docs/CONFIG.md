@@ -47,7 +47,7 @@
 }
 ```
 
-判定：会话有显式记录 → 用它；没有 → 用 `defaultEnabled`。界面胶囊每 15 秒轮询一次 `/ctl/state`。
+判定：会话有显式记录 → 用它；没有 → 用 `defaultEnabled`。界面按钮每 15 秒轮询一次 `/ctl/state`，点击走 `POST /ctl/toggle`。
 
 ## 出问题先看这几处
 
