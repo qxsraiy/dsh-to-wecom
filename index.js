@@ -10,7 +10,6 @@
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:http'
 import { basename, join } from 'node:path'
 import { PROVIDERS, sendNotification } from './notify.js'
 
@@ -320,124 +319,93 @@ export function apply(ctx, config = {}) {
     sessions.set(key, { cwd: patch.cwd || known.cwd, title: patch.title || known.title })
   }
 
-  async function handleControl(req, res) {
-    const headers = {
-      'content-type': 'application/json; charset=utf-8',
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET, POST, OPTIONS',
-      'access-control-allow-headers': 'content-type',
-      'cache-control': 'no-store',
-    }
-    const send = (status, payload) => {
-      res.writeHead(status, headers)
-      res.end(JSON.stringify(payload))
-    }
-    if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return }
-    const url = new URL(req.url || '/', 'http://127.0.0.1')
-    const readBody = async () => {
-      let body = ''
-      for await (const chunk of req) body += chunk
-      return body ? JSON.parse(body) : {}
-    }
-    try {
-      if (req.method === 'GET' && url.pathname === '/ctl/current') {
-        send(200, { ok: true, sessionId: lastSessionId, session: lastSessionId ? sessionState(lastSessionId) : null, state: snapshot() })
-        return
+  // ── 控制面：挂到 DSH 自己的 /api 上（同源、带 cookie 认证，不需要任何额外端口）
+  async function handleOp(input) {
+    const op = String((input && input.op) || 'state')
+    const sessionId = String((input && input.sessionId) || '')
+    if (op === 'config') return { ok: true, providers: PROVIDERS, ...maskedConfig() }
+    if (op === 'save-config') {
+      if (input.provider && PROVIDERS.includes(input.provider)) settings.provider = input.provider
+      const values = input.values && typeof input.values === 'object' ? input.values : {}
+      for (const [key, value] of Object.entries(values)) {
+        if (SECRET_FIELDS.has(key) && (value === '***' || value === '')) continue
+        settings[key] = value
       }
-      if (req.method === 'GET' && url.pathname === '/ctl/config') {
-        send(200, { ok: true, providers: PROVIDERS, ...maskedConfig() })
-        return
+      saveSettings()
+      return { ok: true, providers: PROVIDERS, ...maskedConfig() }
+    }
+    if (op === 'test') {
+      const effective = { ...cfg, ...settings }
+      const text = '[DSH] 测试通知 · ' + new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) + '\n如果你收到这条，说明通道配好了。'
+      try {
+        const result = await sendNotification(effective, text, { title: '测试通知', level: 'test' })
+        return { ok: true, result }
+      } catch (error) {
+        return { ok: false, error: String(error && error.message ? error.message : error) }
       }
-      if (req.method === 'POST' && url.pathname === '/ctl/config') {
-        let input
-        try { input = await readBody() } catch (error) { send(400, { ok: false, error: 'bad_json' }); return }
-        if (input.provider && PROVIDERS.includes(input.provider)) settings.provider = input.provider
-        const values = input.values && typeof input.values === 'object' ? input.values : {}
-        for (const [key, value] of Object.entries(values)) {
-          if (SECRET_FIELDS.has(key) && (value === '***' || value === '')) continue
-          settings[key] = value
-        }
-        saveSettings()
-        send(200, { ok: true, providers: PROVIDERS, ...maskedConfig() })
-        return
-      }
-      if (req.method === 'POST' && url.pathname === '/ctl/test') {
-        const effective = { ...cfg, ...settings }
-        const text = '[DSH] 测试通知 · ' + new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) + '\n如果你收到这条，说明通道配好了。'
+    }
+    if (op === 'current') {
+      if (lastSessionId) rememberSession(lastSessionId, {})
+      return { ok: true, sessionId: lastSessionId, session: lastSessionId ? sessionState(lastSessionId) : null, state: snapshot() }
+    }
+    if (op === 'default') {
+      prefs.defaultEnabled = input.enabled !== false
+      savePrefs()
+      return { ok: true, state: snapshot() }
+    }
+    if (op === 'reset') {
+      if (sessionId) delete prefs.sessions[sessionId]
+      savePrefs()
+      return { ok: true, state: snapshot() }
+    }
+    if (op === 'toggle' || op === 'set') {
+      if (!sessionId) return { ok: false, error: 'missing_session_id' }
+      const current = sessionState(sessionId)
+      const enabled = op === 'toggle' ? !current.enabled : (input.enabled !== false)
+      const label = sessionLabel(sessionId, null)
+      prefs.sessions[sessionId] = { enabled, title: label.title, cwd: label.cwd, updatedAt: Date.now() }
+      savePrefs()
+      return { ok: true, session: sessionState(sessionId), state: snapshot() }
+    }
+    // 默认 state
+    if (sessionId) rememberSession(sessionId, {})
+    return { ok: true, default: prefs.defaultEnabled, session: sessionId ? sessionState(sessionId) : null, state: snapshot() }
+  }
+
+  function registerControlRoute(routeCtx) {
+    const registry = routeCtx && routeCtx.connection && routeCtx.connection.fetch
+    if (!registry || typeof registry.register !== 'function') {
+      if (log.warn) log.warn('[wecom-notify] 没有 connection.fetch 服务，界面开关不可用（通知发送不受影响）')
+      return
+    }
+    registry.register({
+      path: '/api/dsh-to-wecom',
+      methods: ['POST'],
+      requestBody: 'buffered',
+      async fetch(request) {
+        let input = {}
+        try { input = await request.json() } catch (error) { input = {} }
         try {
-          const result = await sendNotification(effective, text, { title: '测试通知', level: 'test' })
-          send(200, { ok: true, result })
+          return Response.json(await handleOp(input))
         } catch (error) {
-          send(200, { ok: false, error: String(error && error.message ? error.message : error) })
+          return Response.json({ ok: false, error: String(error && error.message ? error.message : error) }, { status: 500 })
         }
-        return
-      }
-      if (req.method === 'GET' && url.pathname === '/ctl/state') {
-        const sessionId = url.searchParams.get('session') || ''
-        if (sessionId) rememberSession(sessionId, {})
-        send(200, {
-          ok: true,
-          default: prefs.defaultEnabled,
-          session: sessionId ? sessionState(sessionId) : null,
-          state: snapshot(),
-        })
-        return
-      }
-      if (req.method === 'POST' && url.pathname === '/ctl/default') {
-        let input
-        try { input = await readBody() } catch (error) { send(400, { ok: false, error: 'bad_json' }); return }
-        prefs.defaultEnabled = input.enabled !== false
-        savePrefs()
-        send(200, { ok: true, state: snapshot() })
-        return
-      }
-      if (req.method === 'POST' && (url.pathname === '/ctl/toggle' || url.pathname === '/ctl/set')) {
-        let input
-        try { input = await readBody() } catch (error) { send(400, { ok: false, error: 'bad_json' }); return }
-        const sessionId = String(input.sessionId || '')
-        if (!sessionId) { send(400, { ok: false, error: 'missing_session_id' }); return }
-        const current = sessionState(sessionId)
-        const enabled = url.pathname === '/ctl/toggle' ? !current.enabled : (input.enabled !== false)
-        const label = sessionLabel(sessionId, null)
-        prefs.sessions[sessionId] = {
-          enabled,
-          title: label.title,
-          cwd: label.cwd,
-          updatedAt: Date.now(),
-        }
-        savePrefs()
-        send(200, { ok: true, session: sessionState(sessionId), state: snapshot() })
-        return
-      }
-      if (req.method === 'POST' && url.pathname === '/ctl/reset') {
-        let input
-        try { input = await readBody() } catch (error) { input = {} }
-        const sessionId = String(input.sessionId || '')
-        if (sessionId) delete prefs.sessions[sessionId]
-        savePrefs()
-        send(200, { ok: true, state: snapshot() })
-        return
-      }
-      send(404, { ok: false, error: 'not_found' })
-    } catch (error) {
-      send(500, { ok: false, error: String(error && error.message ? error.message : error) })
-    }
-  }
-
-  let controlServer = null
-  void loadSettings()
-  if (cfg.controlEnabled) {
-    void loadPrefs().then(() => {
-      controlServer = createServer((req, res) => { void handleControl(req, res) })
-      controlServer.on('error', (error) => {
-        if (log.warn) log.warn('[wecom-notify] 控制接口启动失败（端口 ' + cfg.controlPort + '）: ' + String(error && error.message ? error.message : error))
-      })
-      controlServer.listen(cfg.controlPort, '127.0.0.1', () => {
-        if (log.info) log.info('[wecom-notify] 控制接口 http://127.0.0.1:' + cfg.controlPort + '/ctl/state')
-      })
+      },
     })
+    if (log.info) log.info('[wecom-notify] 控制接口已挂到 /api/dsh-to-wecom（同源，无额外端口）')
   }
 
+  if (typeof ctx.inject === 'function') {
+    try {
+      ctx.inject(['connection'], (routeCtx) => {
+        try { registerControlRoute(routeCtx) } catch (error) { if (log.warn) log.warn('[wecom-notify] 控制路由注册失败: ' + String(error)) }
+      })
+    } catch (error) {
+      registerControlRoute(ctx)
+    }
+  } else {
+    registerControlRoute(ctx)
+  }
 
   function facts(s, info) {
     const project = s.cwd ? basename(s.cwd) : 'DSH'
@@ -561,7 +529,6 @@ export function apply(ctx, config = {}) {
   if (typeof ctx.effect === 'function') {
     ctx.effect(() => () => {
       try { if (typeof off === 'function') off() } catch (error) { /* ignore */ }
-      try { if (controlServer) controlServer.close() } catch (error) { /* ignore */ }
     })
   }
 }

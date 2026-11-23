@@ -19,11 +19,15 @@ const hook = http.createServer((req, res) => {
 await new Promise((r) => hook.listen(18083, '127.0.0.1', r))
 
 const handlers = []
+const routes = new Map()
 const logs = []
 const ctx = {
   on(name, fn) { handlers.push([name, fn]); return () => {} },
   effect(fn) { fn() },
   logger: { info: (m) => logs.push('INFO ' + m), warn: (m) => logs.push('WARN ' + m) },
+  inject(names, callback) {
+    callback({ connection: { fetch: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } } } })
+  },
 }
 
 apply(ctx, {
@@ -34,13 +38,18 @@ apply(ctx, {
   notifyOn: 'every-turn',
   minGapMs: 5,
   queueDir: QUEUE_DIR,
-  controlPort: 18795,
 })
 
-const base = 'http://127.0.0.1:18795'
-await new Promise((r) => setTimeout(r, 400))
+const route = routes.get('/api/dsh-to-wecom')
+if (!route) { console.error('FAIL: 控制路由没有注册'); process.exit(1) }
+const call = async (payload) => {
+  const res = await route.fetch(new Request('http://localhost/api/dsh-to-wecom', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+  }))
+  return await res.json()
+}
 // 默认关闭，先打开默认（等价于在设置里给未单独设置的会话开绿灯）
-await fetch(base + '/ctl/default', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }) })
+await call({ op: 'default', enabled: true })
 
 const session = { id: 'session-abcd1234', header: { cwd: 'D:\\aiwork\\cms' } }
 const emit = (type, data) => { for (const [name, fn] of handlers) if (name === 'session/event') fn(session, { type, data, seq: 0, time: Date.now() }) }

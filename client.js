@@ -9,15 +9,17 @@
         Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
         var react = require('react');
         var h = react.createElement;
-        var BASE = 'http://127.0.0.1:8791';
+        // 同源 /api 路由（Host 侧挂在 DSH 自己的 connection.fetch 上，不需要额外端口）
+        var ENDPOINT = '/api/dsh-to-wecom';
 
-        function call(method, path, payload) {
-          var init = { method: method, cache: 'no-store' };
-          if (payload !== undefined) {
-            init.headers = { 'content-type': 'application/json' };
-            init.body = JSON.stringify(payload);
-          }
-          return fetch(BASE + path, init).then(function (res) {
+        function op(name, extra) {
+          var payload = Object.assign({ op: name }, extra || {});
+          return fetch(ENDPOINT, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).then(function (res) {
             if (!res.ok) throw new Error('HTTP ' + res.status);
             return res.json();
           });
@@ -54,8 +56,7 @@
           react.useEffect(function () { if (propId && propId !== sessionId) setId(propId); }, [propId]);
 
           var load = react.useCallback(function () {
-            var query = sessionId ? ('?session=' + encodeURIComponent(sessionId)) : '';
-            return call('GET', '/ctl/state' + query).then(function (payload) {
+            return op('state', sessionId ? { sessionId: sessionId } : {}).then(function (payload) {
               if (!sessionId && payload.session && payload.session.sessionId) setId(payload.session.sessionId);
               setData(payload);
               setError('');
@@ -73,11 +74,11 @@
             if (busy) return;
             setBusy(true);
             var request = sessionId
-              ? call('POST', '/ctl/toggle', { sessionId: sessionId })
-              : call('GET', '/ctl/current').then(function (payload) {
+              ? op('toggle', { sessionId: sessionId })
+              : op('current').then(function (payload) {
                   if (!payload.sessionId) throw new Error('取不到当前会话');
                   setId(payload.sessionId);
-                  return call('POST', '/ctl/toggle', { sessionId: payload.sessionId });
+                  return op('toggle', { sessionId: payload.sessionId });
                 });
             request.then(function (payload) {
               setData(function (prev) { return { defaultEnabled: payload.state ? payload.state.defaultEnabled : (prev ? prev.defaultEnabled : false), session: payload.session || null }; });
@@ -91,7 +92,7 @@
           var enabled = current ? current.enabled !== false : false;
           var label = error ? '通知离线' : (enabled ? '推送开' : '推送关');
           var tooltip = error
-            ? ('控制接口不可达：' + error)
+            ? ('控制路由不可达：' + error)
             : ((enabled ? '关闭' : '开启') + '本会话的推送' + (current && current.title ? ('\n会话：' + current.title) : '') + (sessionId ? ('\nID：' + sessionId) : ''));
 
           return h('button', {
@@ -168,7 +169,7 @@
           var setBusy = busyPair[1];
 
           react.useEffect(function () {
-            call('GET', '/ctl/config').then(function (payload) {
+            op('config').then(function (payload) {
               setConfig({ provider: payload.provider || 'wecom-robot', values: payload.values || {} });
             }).catch(function (err) { setMessage('读取配置失败：' + String(err && err.message ? err.message : err)); });
           }, []);
@@ -183,7 +184,7 @@
           function pickProvider(provider) { setConfig({ provider: provider, values: config.values || {} }); }
           function save() {
             setBusy('save');
-            call('POST', '/ctl/config', { provider: config.provider, values: config.values }).then(function (payload) {
+            op('save-config', { provider: config.provider, values: config.values }).then(function (payload) {
               setConfig({ provider: payload.provider || config.provider, values: payload.values || {} });
               setMessage('已保存');
             }).catch(function (err) { setMessage('保存失败：' + String(err && err.message ? err.message : err)); })
@@ -192,8 +193,8 @@
           function test() {
             setBusy('test');
             setMessage('正在发送测试通知…');
-            call('POST', '/ctl/config', { provider: config.provider, values: config.values })
-              .then(function () { return call('POST', '/ctl/test'); })
+            op('save-config', { provider: config.provider, values: config.values })
+              .then(function () { return op('test'); })
               .then(function (payload) {
                 setMessage(payload.ok ? '测试通知已发出，去手机上看看' : ('测试失败：' + payload.error));
               })

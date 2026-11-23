@@ -73,7 +73,7 @@ sh scripts/install.sh web      # 指定 profile 名
 | 检查 | 期望 |
 |---|---|
 | DSH 日志（`<profile>/logs`，搜 `[wecom-notify]`） | `已加载 · 通道=... · 格式=text`，以及 `控制接口 http://127.0.0.1:8791/ctl/state` |
-| 浏览器开 `http://127.0.0.1:8791/ctl/state` | 返回 JSON `{"ok":true,...}` |
+| 浏览器 console 执行 `fetch('/api/dsh-to-wecom',{method:'POST',headers:{'content-type':'application/json'},body:'{"op":"state"}'}).then(r=>r.json()).then(console.log)` | 返回 `{ok:true,...}` |
 | 设置页「发送测试」 | 收到测试消息；失败会显示具体 `errcode` |
 | 跑一轮对话 | 该会话已开启时，手机收到 `【完成】会话标题` |
 
@@ -101,7 +101,7 @@ git pull
 | 右上角没有开关 | 同上；确认 `package.json` 里有 `dsh.client` 段与 `./client` 导出 |
 | `发送测试` 报 93000 | 企业微信 key 无效或机器人被移除 |
 | 报 45009 | 企业微信限流（20 条/分钟），插件会自动退避重试 |
-| 报 `connect ECONNREFUSED 127.0.0.1:8791` | Host 侧控制接口没起来：看日志「控制接口启动失败」，可能端口被占，改 `controlPort` |
+| 界面按钮显示「通知离线」 | Host 侧控制路由没注册：日志里应有 `控制接口已挂到 /api/dsh-to-wecom`；没有则说明 `connection` 服务不可用或插件没加载 |
 | 企业微信应用消息报 60020 | 服务器出口 IP 不在「企业可信 IP」白名单里 |
 
 ## 10. 安全
