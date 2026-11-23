@@ -346,7 +346,7 @@ export function apply(ctx, config = {}) {
   // ── 每个会话的推送开关（界面开关读写这里；按 sessionId 区分，同一目录的不同会话互不影响）
   const dataDir = cfg.queueDir || join(process.cwd(), '.dsh-wecom-notify')
   const prefsFile = join(dataDir, 'sessions.json')
-  const prefs = { defaultEnabled: false, sessions: {} } // sessionId -> { enabled, title, cwd, updatedAt }
+  const prefs = { defaultEnabled: false, sessions: {}, topics: {}, bindings: {}, inbound: {} } // sessions: 开关; topics: sessionId->threadId
   const sessions = new Map() // sessionId -> { cwd, title }
 
   function fallbackTitleFrom(s) {
@@ -380,6 +380,9 @@ export function apply(ctx, config = {}) {
       if (parsed && typeof parsed === 'object') {
         if (typeof parsed.defaultEnabled === 'boolean') prefs.defaultEnabled = parsed.defaultEnabled
         if (parsed.sessions && typeof parsed.sessions === 'object') prefs.sessions = parsed.sessions
+        if (parsed.topics && typeof parsed.topics === 'object') prefs.topics = parsed.topics
+        if (parsed.bindings && typeof parsed.bindings === 'object') prefs.bindings = parsed.bindings
+        if (parsed.inbound && typeof parsed.inbound === 'object') prefs.inbound = parsed.inbound
       }
     } catch (error) { /* 首次运行没有配置文件 */ }
   }
